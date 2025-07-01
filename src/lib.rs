@@ -143,18 +143,6 @@ impl SpacePacket {
         Ok(packet)
     }
 
-    /// Returns a view into the raw bytes that make up this space packet.
-    pub fn as_bytes(&self) -> &[u8] {
-        let len = self.packet_length();
-        let data = self as *const SpacePacket as *const u8;
-        // SAFETY: cast is safe because, by construction:
-        // - `data` is non-null and valid for `len * core::mem::size_of::<u8>()` bytes
-        // - `data` points to at least `len` validly-initialized u8 bytes
-        // - `data` points to data that is not mutated
-        // - `len` is a valid pointer offset for `data`
-        unsafe { core::slice::from_raw_parts(data, len) }
-    }
-
     /// Since the space packet protocol may technically support alternative packet structures in
     /// future versions, the 3-bit packet version field may not actually contain a "correct" value.
     pub fn packet_version(&self) -> PacketVersionNumber {
@@ -474,7 +462,7 @@ fn deserialize_trivial_packet() {
     assert_eq!(packet.sequence_flag(), SequenceFlag::Unsegmented);
     assert_eq!(packet.packet_sequence_count(), PacketSequenceCount(0));
     assert_eq!(packet.packet_data_length(), 1);
-    assert_eq!(packet.as_bytes(), bytes);
+    assert_eq!(packet.packet_data_field(), &bytes[6..]);
 }
 
 /// Serialization of a relatively trivial packet. Used to verify that all serialization logic is
@@ -504,15 +492,18 @@ fn serialize_trivial_packet() {
     assert_eq!(packet.sequence_flag(), SequenceFlag::Unsegmented);
     assert_eq!(packet.packet_sequence_count(), PacketSequenceCount(0));
     assert_eq!(packet.packet_data_length(), 1);
-    assert_eq!(packet.as_bytes(), &[
-        0b0000_1000u8,
-        0b0000_0000u8,
-        0b1100_0000u8,
-        0b0000_0000u8,
-        0b0000_0000u8,
-        0b0000_0000u8,
-        0b0000_0000u8,
-    ]);
+    assert_eq!(
+        packet.packet_data_field(),
+        &[
+            0b0000_1000u8,
+            0b0000_0000u8,
+            0b1100_0000u8,
+            0b0000_0000u8,
+            0b0000_0000u8,
+            0b0000_0000u8,
+            0b0000_0000u8,
+        ][6..]
+    );
 }
 
 /// Roundtrip serialization and subsequent deserialization of space packets shall result in exactly
