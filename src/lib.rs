@@ -4,6 +4,8 @@
 //! independent of the precise implementation. Endpoint functionality, i.e., actually consuming and
 //! responding to the packet contents is implementation specific, and hence out of scope.
 
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
 /// Space packets are implemented as dynamically-sized structs that contain the primary header as
 /// their first field, followed by the packet data as pure byte array. In this manner,
 /// deserialization can be reduced to a simple byte cast followed by interpretation of the primary
@@ -17,7 +19,7 @@
 /// Any means of constructing a SpacePacket in this crate shall perform a consistency check on any
 /// received bytes. Hence, any SpacePacket object may be assumed to be a valid Space Packet.
 #[repr(C)]
-#[derive(Eq, PartialEq, Debug, Hash)]
+#[derive(Eq, PartialEq, Debug, Hash, FromBytes, KnownLayout, Immutable, Unaligned)]
 pub struct SpacePacket {
     primary_header: SpacePacketPrimaryHeader,
     packet_data: [u8],
@@ -71,14 +73,7 @@ impl SpacePacket {
         let packet_size =
             packet_data_length_from_header + core::mem::size_of::<SpacePacketPrimaryHeader>();
         let packet_bytes = &bytes[..packet_size];
-        let packet =
-            core::ptr::slice_from_raw_parts(packet_bytes.as_ptr(), packet_data_length_from_header)
-                as *const SpacePacket;
-        // SAFETY: Dereference is safe because, by construction:
-        // - `packet` is non-null and of sufficient size
-        // - `packet` points only to at least `packet_data_length_from_header` initialized u8 bytes
-        // - `packet` refers, by construction, to a valid and contiguous memory region
-        let packet = unsafe { &*packet };
+        let packet = FromBytes::ref_from_bytes(packet_bytes).unwrap();
 
         Ok(packet)
     }
@@ -376,7 +371,9 @@ impl PacketSequenceCount {
 /// header (e.g., while parsing an incoming byte stream to a packet). Hence, a C representation is
 /// required.
 #[repr(C)]
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, Hash, Debug, FromBytes, KnownLayout, Immutable, Unaligned, IntoBytes,
+)]
 pub struct SpacePacketPrimaryHeader {
     bytes: [u8; 6],
 }
