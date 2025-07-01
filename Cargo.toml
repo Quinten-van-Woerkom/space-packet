@@ -1,0 +1,11 @@
+[package]
+name = "ccsds-space-packet"
+version = "0.1.0"
+edition = "2024"
+
+[dev-dependencies]
+rand = { version = "0.9.1", features = ["small_rng"], default-features = false }
+no-panic = "0.1.35"
+
+[profile.dev]
+opt-level = 1
