@@ -41,7 +41,7 @@ impl SpacePacket {
         // byte slice, so we can construct a space packet by bytecasting. Note that we must still
         // verify that the resulting space packet is well-formed, i.e., that its header contents
         // are valid.
-        let primary_header = SpacePacket::ref_from_bytes(bytes).unwrap();
+        let primary_header: &SpacePacket = zerocopy::transmute_ref!(bytes);
 
         // Then, we verify that it is semantically correct.
         // If the packet version is not supported, the raw bytes are returned: after all, for different
@@ -66,7 +66,7 @@ impl SpacePacket {
         // packet primary header.
         let packet_size = length_from_header + Self::primary_header_size();
         let packet_bytes = &bytes[..packet_size];
-        let packet = FromBytes::ref_from_bytes(packet_bytes).unwrap();
+        let packet: &SpacePacket = zerocopy::transmute_ref!(packet_bytes);
 
         Ok(packet)
     }
@@ -114,7 +114,7 @@ impl SpacePacket {
 
         // Now that the buffer is known to be of sufficient size to store the requested space
         // packet, it may be transmuted into a reference to such a space packet.
-        let packet = SpacePacket::mut_from_bytes(buffer).unwrap();
+        let packet: &mut SpacePacket = zerocopy::transmute_mut!(buffer);
 
         // Initialize header bytes to valid values.
         packet.set_apid(apid);
