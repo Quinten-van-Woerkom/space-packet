@@ -32,42 +32,34 @@ impl SpacePacket {
     /// Attempts to parse a space packet from a given byte slice. If this fails, a reason is
     /// given for this failure. Shall never panic: rather, an error enum is returned explaining why
     /// the given octet string is not a valid space packet.
+    ///
+    /// This deserialization is fully zero-copy. The `&SpacePacket` returned on success directly
+    /// references the input slice `bytes`, but is merely validated to be a valid space packet.
     #[cfg_attr(test, no_panic::no_panic)]
-    pub fn parse(bytes: &[u8]) -> Result<&SpacePacket, SpacePacketParsingError> {
+    pub fn deserialize(bytes: &[u8]) -> Result<&SpacePacket, InvalidSpacePacket> {
         // First, we simply cast the packet into a header and check that the byte buffer permits
         // this: i.e., if it is large enough to contain a header.
         let primary_header = match SpacePacket::ref_from_bytes(bytes) {
             Ok(primary_header) => primary_header,
             Err(CastError::Size(_)) => {
-                return Err(SpacePacketParsingError::SliceTooSmallForSpacePacketHeader {
+                return Err(InvalidSpacePacket::SliceTooSmallForSpacePacketHeader {
                     length: bytes.len(),
                 });
             }
             Err(CastError::Alignment(_)) => unreachable!(),
         };
 
-        // Then, we verify that the packet version found in the packet header is a version that is
-        // supported by this library.
-        let version = primary_header.packet_version();
-        if !version.is_supported() {
-            return Err(SpacePacketParsingError::UnsupportedPacketVersion { version });
-        }
+        // Then, we verify that the resulting packet contents semantically form a valid space
+        // packet.
+        primary_header.validate()?;
 
-        // The packet header contains an indication of the actual amount of bytes stored in the packet.
-        // If this is larger than the size of the slice, something went wrong.
+        // Finally, we truncate the passed byte slice to exactly accommodate the specified space
+        // packet and construct a space packet that consists of only this memory region.
         let packet_size = primary_header.packet_data_length() + Self::primary_header_size();
-        let buffer_size = bytes.len();
-        if packet_size > buffer_size {
-            return Err(SpacePacketParsingError::PartialPacket {
-                packet_size,
-                buffer_size,
-            });
-        }
         let packet_bytes = &bytes[..packet_size];
         let packet = match SpacePacket::ref_from_bytes(packet_bytes) {
             Ok(primary_header) => primary_header,
-            Err(CastError::Alignment(_)) => unreachable!(),
-            Err(CastError::Size(_)) => unreachable!(),
+            Err(_) => unreachable!(),
         };
 
         Ok(packet)
@@ -118,6 +110,36 @@ impl SpacePacket {
         packet.set_packet_data_length(packet_data_length)?;
 
         Ok(packet)
+    }
+
+    /// Validates that the space packet is valid, in that its fields are coherent. In particular,
+    /// it is verified that the version number is that of a supported space packet, and that the
+    /// packet size as stored in the header is not larger than the packet size as permitted by the
+    /// actual memory span of which the packet consists.
+    ///
+    /// Note that this concerns semantic validity. The implementation shall not depend on this for
+    /// memory safety.
+    fn validate(&self) -> Result<(), InvalidSpacePacket> {
+        // Then, we verify that the packet version found in the packet header is a version that is
+        // supported by this library.
+        let version = self.packet_version();
+        if !version.is_supported() {
+            return Err(InvalidSpacePacket::UnsupportedPacketVersion { version });
+        }
+
+        // The packet header contains an indication of the actual amount of bytes stored in the packet.
+        // If this is larger than the size of the actual memory contents, only a partial packet was
+        // received.
+        let packet_size = self.packet_data_length() + Self::primary_header_size();
+        let buffer_size = self.packet_length();
+        if packet_size > buffer_size {
+            return Err(InvalidSpacePacket::PartialPacket {
+                packet_size,
+                buffer_size,
+            });
+        }
+
+        Ok(())
     }
 
     /// Returns the size of a space packet primary header, in bytes. In the version that is
@@ -313,7 +335,7 @@ impl core::fmt::Debug for SpacePacket {
 /// without breaking API.
 #[non_exhaustive]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub enum SpacePacketParsingError {
+pub enum InvalidSpacePacket {
     /// Returned when a byte slice is too small to contain any space packet (i.e., is smaller than
     /// a header with a single-byte user data field).
     SliceTooSmallForSpacePacketHeader { length: usize },
@@ -483,7 +505,7 @@ fn deserialize_trivial_packet() {
         0b0000_0000u8,
         0b0000_0000u8,
     ];
-    let packet = SpacePacket::parse(bytes).unwrap();
+    let packet = SpacePacket::deserialize(bytes).unwrap();
 
     assert_eq!(packet.packet_length(), 7);
     assert_eq!(
@@ -749,10 +771,10 @@ fn buffer_too_small_for_parsed_packet() {
         // be invalid (the stored packet data length will always correspond with a packet larger
         // than 127 bytes).
         let bytes = &packet.as_bytes()[..127];
-        let result = SpacePacket::parse(bytes);
+        let result = SpacePacket::deserialize(bytes);
         assert_eq!(
             result,
-            Err(SpacePacketParsingError::PartialPacket {
+            Err(InvalidSpacePacket::PartialPacket {
                 packet_size: packet_data_length as usize + SpacePacket::primary_header_size(),
                 buffer_size: bytes.len()
             })
