@@ -313,6 +313,8 @@ impl SpacePacket {
     }
 }
 
+/// Because `SpacePacket` is `repr(packed)` and `SpacePacket::data_field` is unsized, the default
+/// `core::fmt::Debug` implementation cannot be derived.
 impl core::fmt::Debug for SpacePacket {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
