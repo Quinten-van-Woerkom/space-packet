@@ -83,20 +83,21 @@ impl SpacePacket {
             return Err(SpacePacketConstructionError::EmptyDataFieldRequested);
         }
 
-        // Now that the buffer is known to be of sufficient size to store the requested space
-        // packet, it may be transmuted into a reference to such a space packet.
+        // Verify that the packet length as requested may actually fit on the supplied buffer.
         let packet_length = SpacePacket::primary_header_size() + packet_data_length as usize;
         let buffer_length = buffer.len();
-        let packet = match SpacePacket::mut_from_bytes(buffer) {
-            Ok(packet) => packet,
-            Err(CastError::Size(_)) => {
-                return Err(SpacePacketConstructionError::BufferTooSmall {
-                    buffer_length,
-                    packet_length,
-                });
-            }
-            Err(CastError::Alignment(_)) => unreachable!(),
-        };
+        if packet_length > buffer_length {
+            return Err(SpacePacketConstructionError::BufferTooSmall {
+                buffer_length,
+                packet_length,
+            });
+        }
+
+        // Afterwards, we truncate the buffer to use only the bytes that actually belong to the
+        // packet. With the length check done, the `SpacePacket::mut_from_bytes()` call is known
+        // to be infallible, so we simply unwrap.
+        let packet_bytes = &mut buffer[..packet_length];
+        let packet = SpacePacket::mut_from_bytes(packet_bytes).unwrap();
 
         // Initialize header bytes to valid values.
         packet.set_apid(apid);
@@ -434,6 +435,16 @@ impl Apid {
         Self(id)
     }
 
+    /// Helper functions used during formal verification to create an APID that is actually within
+    /// the stated bounds, since we cannot use the type system to express this range.
+    #[cfg(kani)]
+    fn any_apid() -> Self {
+        match kani::any() {
+            any @ 0..=Self::MAX => Self(any),
+            _ => Self(42),
+        }
+    }
+
     /// A special APID value (0x7ff) is reserved for idle space packets, i.e., packets that do not
     /// carry any actual data.
     pub fn is_idle(&self) -> bool {
@@ -469,6 +480,17 @@ impl PacketSequenceCount {
         Self(0)
     }
 
+    /// Helper functions used during formal verification to create a packet sequence count that is
+    /// actually within the stated bounds, since we cannot use the type system to express this
+    /// range.
+    #[cfg(kani)]
+    fn any_packet_sequence_count() -> Self {
+        match kani::any() {
+            any @ 0..=Self::MAX => Self(any),
+            _ => Self(42),
+        }
+    }
+
     /// A good default behaviour is for the packet sequence count to increment by one every time
     /// a new packet is sent. This method permits a simple wrapping increment to be performed, to
     /// make this easier.
@@ -492,6 +514,14 @@ mod kani_harness {
     fn header_parsing() {
         let bytes = [kani::any(); 16];
         let packet = SpacePacket::deserialize(&bytes);
+        if let Ok(packet) = packet {
+            assert!(packet.packet_length() <= bytes.len());
+            assert_eq!(
+                packet.packet_data_field().len(),
+                packet.packet_data_length()
+            );
+            assert!(packet.apid().0 <= 0b0000_0111_1111_1111);
+        }
     }
 
     /// This test verifies that all (!) possible packet construction requests can be handled
@@ -501,16 +531,81 @@ mod kani_harness {
     /// function.
     #[kani::proof]
     fn packet_construction() {
-        let mut bytes = [kani::any(); 16];
-        let _ = SpacePacket::construct(
+        const BYTES: usize = 16;
+        let mut bytes = [kani::any(); BYTES];
+        let packet_type = kani::any();
+        let secondary_header_flag = kani::any();
+        let apid = Apid::any_apid();
+        let sequence_flag = kani::any();
+        let sequence_count = PacketSequenceCount::any_packet_sequence_count();
+        let packet_data_length = kani::any();
+
+        let packet = SpacePacket::construct(
             &mut bytes,
-            kani::any(),
-            kani::any(),
-            kani::any(),
-            kani::any(),
-            kani::any(),
-            kani::any(),
+            packet_type,
+            secondary_header_flag,
+            apid,
+            sequence_flag,
+            sequence_count,
+            packet_data_length,
         );
+
+        // First, we verify that all valid requests result in a returned packet.
+        let valid_request = packet_data_length != 0
+            && (packet_data_length as usize)
+                <= (BYTES - SpacePacket::primary_header_size() as usize);
+        if valid_request {
+            assert!(packet.is_ok());
+        }
+
+        // Vice versa, any invalid requests must be rejected.
+        if !valid_request {
+            assert!(!packet.is_ok());
+        }
+
+        // These checks ensure that any returned packet is indeed consistent with the requested
+        // packet header information.
+        if let Ok(packet) = packet {
+            assert!(packet.packet_length() <= BYTES);
+            assert_eq!(
+                packet.packet_data_field().len(),
+                packet.packet_data_length()
+            );
+
+            assert_eq!(packet.packet_type(), packet_type);
+            assert_eq!(packet.secondary_header_flag(), secondary_header_flag);
+            assert_eq!(packet.apid(), apid);
+            assert_eq!(packet.sequence_flag(), sequence_flag);
+            assert_eq!(packet.packet_sequence_count(), sequence_count);
+            assert_eq!(packet.packet_data_length(), packet_data_length as usize);
+        }
+    }
+}
+
+/// Test generated for harness `kani_harness::packet_construction` after assertion failure.
+#[test]
+fn kani_failure1() {
+    const BYTES: usize = 16;
+    let mut bytes = [0; BYTES];
+    let packet = SpacePacket::construct(
+        &mut bytes,
+        PacketType::Telecommand,
+        SecondaryHeaderFlag::Present,
+        Apid::new(0),
+        SequenceFlag::Unsegmented,
+        PacketSequenceCount(65535),
+        8,
+    );
+
+    if let Ok(packet) = packet {
+        assert!(packet.packet_length() <= BYTES);
+        assert_eq!(
+            packet.packet_data_field().len(),
+            packet.packet_data_length(),
+            "Packet data field length does not match packet data field as stored: {:?}",
+            packet
+        );
+        assert!(packet.apid().0 <= 0b0000_0111_1111_1111);
     }
 }
 
