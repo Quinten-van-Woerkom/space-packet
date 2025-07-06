@@ -6,20 +6,8 @@ version = 4
 name = "ccsds-space-packet"
 version = "0.1.0"
 dependencies = [
- "no-panic",
  "rand",
  "zerocopy",
-]
-
-[[package]]
-name = "no-panic"
-version = "0.1.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "113d1abd5bb3dc25a75d9b3a973f40e31eb03e0bae23c172b32cca4bcb9cfad2"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

@@ -35,7 +35,6 @@ impl SpacePacket {
     ///
     /// This deserialization is fully zero-copy. The `&SpacePacket` returned on success directly
     /// references the input slice `bytes`, but is merely validated to be a valid space packet.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn deserialize(bytes: &[u8]) -> Result<&SpacePacket, InvalidSpacePacket> {
         // First, we simply cast the packet into a header and check that the byte buffer permits
         // this: i.e., if it is large enough to contain a header.
@@ -69,7 +68,6 @@ impl SpacePacket {
     /// `SpacePacketConstructionError` if this is not possible for whatever reason. Note that the
     /// data field is only "allocated" on the buffer, but never further populated. That may be done
     /// after the SpacePacket is otherwise fully constructed.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn construct(
         buffer: &mut [u8],
         packet_type: PacketType,
@@ -150,7 +148,6 @@ impl SpacePacket {
 
     /// Since the space packet protocol may technically support alternative packet structures in
     /// future versions, the 3-bit packet version field may not actually contain a "correct" value.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn packet_version(&self) -> PacketVersionNumber {
         use core::ops::Shr;
         PacketVersionNumber(self.packet_identification.as_bytes()[0].shr(5))
@@ -158,7 +155,6 @@ impl SpacePacket {
 
     /// Initializes the packet version to the proper value. Must be a fixed value, so this function
     /// takes no arguments.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn initialize_packet_version(&mut self) {
         self.packet_identification.as_mut_bytes()[0] &= 0b0001_1111;
         self.packet_identification.as_mut_bytes()[0] |=
@@ -168,7 +164,6 @@ impl SpacePacket {
     /// The packet type denotes whether a packet is a telecommand (request) or telemetry (report)
     /// packet. Note that the exact definition of telecommand and telemetry may differ per system,
     /// and indeed the "correct" value here may differ per project.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn packet_type(&self) -> PacketType {
         match (self.packet_identification.as_bytes()[0] & 0x10) == 0x10 {
             true => PacketType::Telecommand,
@@ -177,7 +172,6 @@ impl SpacePacket {
     }
 
     /// Sets the packet type to the given value.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn set_packet_type(&mut self, packet_type: PacketType) {
         self.packet_identification.as_mut_bytes()[0] &= 0b1110_1111;
         self.packet_identification.as_mut_bytes()[0] |= (packet_type as u8) << 4;
@@ -186,7 +180,6 @@ impl SpacePacket {
     /// Denotes whether the packet contains a secondary header. If no user field is present, the
     /// secondary header is mandatory (presumably, to ensure that some data is always transferred,
     /// considering the space packet header itself contains no meaningful data).
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn secondary_header_flag(&self) -> SecondaryHeaderFlag {
         match (self.packet_identification.as_bytes()[0] & 0x08) == 0x08 {
             true => SecondaryHeaderFlag::Present,
@@ -195,7 +188,6 @@ impl SpacePacket {
     }
 
     /// Updates the value of the secondary header flag with the provided value.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn set_secondary_header_flag(&mut self, secondary_header_flag: SecondaryHeaderFlag) {
         self.packet_identification.as_mut_bytes()[0] &= 0b1111_0111;
         self.packet_identification.as_mut_bytes()[0] |= (secondary_header_flag as u8) << 3;
@@ -205,13 +197,11 @@ impl SpacePacket {
     /// field may differ per implementation: technically, it only represents "some" data path.
     /// In practice, it will often be a identifier for a data channel, the packet source, or the
     /// packet destination.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn apid(&self) -> Apid {
         Apid(self.packet_identification.get() & 0b0000_0111_1111_1111)
     }
 
     /// Sets the APID used to route the packet to the given value.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn set_apid(&mut self, apid: Apid) {
         let apid = apid.0.to_be_bytes();
         self.packet_identification.as_mut_bytes()[0] &= 0b1111_1000;
@@ -221,7 +211,6 @@ impl SpacePacket {
 
     /// Sequence flags may be used to indicate that the data contained in a packet is only part of
     /// a larger set of application data.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn sequence_flag(&self) -> SequenceFlag {
         use core::ops::Shr;
         match self.packet_sequence_control.as_bytes()[0].shr(6i32) {
@@ -234,7 +223,6 @@ impl SpacePacket {
     }
 
     /// Sets the sequence flag to the provided value.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn set_sequence_flag(&mut self, sequence_flag: SequenceFlag) {
         self.packet_sequence_control.as_mut_bytes()[0] &= 0b0011_1111;
         self.packet_sequence_control.as_mut_bytes()[0] |= (sequence_flag as u8) << 6;
@@ -244,7 +232,6 @@ impl SpacePacket {
     /// each space packet (generated per APID). For telecommands (i.e., with packet type 1) this
     /// may also be a "packet name" that identifies the telecommand packet within its
     /// communications session.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn packet_sequence_count(&self) -> PacketSequenceCount {
         PacketSequenceCount(self.packet_sequence_control.get() & 0b0011_1111_1111_1111)
     }
@@ -252,7 +239,6 @@ impl SpacePacket {
     /// Sets the packet sequence count to the provided value. This value must be provided by an
     /// external counter and is not provided at a Space Packet type level because it might differ
     /// between packet streams.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn set_packet_sequence_count(&mut self, sequence_count: PacketSequenceCount) {
         self.packet_sequence_control.as_mut_bytes()[0] &= 0b1100_0000;
         self.packet_sequence_control.as_mut_bytes()[0] |=
@@ -263,7 +249,6 @@ impl SpacePacket {
     /// The packet data length field represents the length of the associated packet data field.
     /// However, it is not stored directly: rather, the "length count" is stored, which is the
     /// packet data length minus one.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn packet_data_length(&self) -> usize {
         self.data_length.get() as usize + 1
     }
@@ -271,7 +256,6 @@ impl SpacePacket {
     /// Sets the packet data length field to the provided value. Note that the given value is not
     /// stored directly, but rather decremented by one first. Accordingly, and as per the CCSDS
     /// Space Packet Protocol standard, packet data lengths of 0 are not allowed.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn set_packet_data_length(
         &mut self,
         packet_data_length: u16,
@@ -295,19 +279,16 @@ impl SpacePacket {
 
     /// Returns the total length of the packet in bytes. Note the distinction from the packet data
     /// length, which refers only to the length of the data field of the packet.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn packet_length(&self) -> usize {
         self.as_bytes().len()
     }
 
     /// Returns a reference to the packet data field contained in this space packet.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn packet_data_field(&self) -> &[u8] {
         &self.data_field
     }
 
     /// Returns a mutable reference to the packet data field contained in this space packet.
-    #[cfg_attr(test, no_panic::no_panic)]
     pub fn packet_data_field_mut(&mut self) -> &mut [u8] {
         &mut self.data_field
     }
@@ -418,6 +399,7 @@ impl PacketVersionNumber {
 /// packet. Note that the exact definition of telecommand and telemetry may differ per system,
 /// and indeed the "correct" value here may differ per project.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub enum PacketType {
     Telemetry = 0,
     Telecommand = 1,
@@ -427,6 +409,7 @@ pub enum PacketType {
 /// secondary header is mandatory (presumably, to ensure that some data is always transferred,
 /// considering the space packet header itself contains no meaningful data).
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub enum SecondaryHeaderFlag {
     Absent = 0,
     Present = 1,
@@ -437,6 +420,7 @@ pub enum SecondaryHeaderFlag {
 /// In practice, it will often be a identifier for: a data channel, the packet source, or the
 /// packet destination.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct Apid(u16);
 
 impl Apid {
@@ -460,6 +444,7 @@ impl Apid {
 /// Sequence flags may be used to indicate that the data contained in a packet is only part of
 /// a larger set of application data.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub enum SequenceFlag {
     Continuation = 0b00,
     First = 0b01,
@@ -473,6 +458,7 @@ pub enum SequenceFlag {
 /// may also be a "packet name" that identifies the telecommand packet within its
 /// communications session.
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug, Default)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct PacketSequenceCount(u16);
 
 impl PacketSequenceCount {
@@ -491,6 +477,40 @@ impl PacketSequenceCount {
         if self.0 > Self::MAX {
             self.0 = 0;
         }
+    }
+}
+
+/// Test harness for formal verification.
+#[cfg(kani)]
+mod kani_harness {
+    use super::*;
+    use ::kani;
+
+    /// This test verifies that all (!) byte sequences up to 16 bytes in length can be handled by
+    /// the packet parser without panics.
+    #[kani::proof]
+    fn header_parsing() {
+        let bytes = [kani::any(); 16];
+        let packet = SpacePacket::deserialize(&bytes);
+    }
+
+    /// This test verifies that all (!) possible packet construction requests can be handled
+    /// without panics. Here, we do not touch the data field, to prevent exponential blow-up of the
+    /// proof pipeline. Since the packet constructor performs no actions on the packet data field
+    /// beyond returning a reference to it, this makes for a strong proof about the safety of this
+    /// function.
+    #[kani::proof]
+    fn packet_construction() {
+        let mut bytes = [kani::any(); 16];
+        let _ = SpacePacket::construct(
+            &mut bytes,
+            kani::any(),
+            kani::any(),
+            kani::any(),
+            kani::any(),
+            kani::any(),
+            kani::any(),
+        );
     }
 }
 

@@ -5,7 +5,6 @@ edition = "2024"
 
 [dev-dependencies]
 rand = { version = "0.9.1", features = ["small_rng"], default-features = false }
-no-panic = "0.1.35"
 
 [profile.dev] # Changes needed to support no_panic
 opt-level = 2
@@ -14,3 +13,6 @@ overflow-checks = false
 
 [dependencies]
 zerocopy = { version = "0.8.26", features = ["derive"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
