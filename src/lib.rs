@@ -508,11 +508,21 @@ mod kani_harness {
     use super::*;
     use ::kani;
 
-    /// This test verifies that all (!) byte sequences up to 16 bytes in length can be handled by
-    /// the packet parser without panics.
+    /// This test verifies that all possible primary headers may be parsed for all packets up to
+    /// u16::MAX in size, without panics. Note that the packet data field is assumed to always be
+    /// zero here. This is needed to restrict the search space for kani, and is a valid assumption
+    /// because the parsing implementation never touches the packet data field contents.
     #[kani::proof]
     fn header_parsing() {
-        let bytes = [kani::any(); 16];
+        let mut bytes = [0u8; u16::MAX as usize];
+        bytes[0] = kani::any();
+        bytes[1] = kani::any();
+        bytes[2] = kani::any();
+        bytes[3] = kani::any();
+        bytes[4] = kani::any();
+        bytes[5] = kani::any();
+        bytes[6] = kani::any();
+
         let packet = SpacePacket::deserialize(&bytes);
         if let Ok(packet) = packet {
             assert!(packet.packet_length() <= bytes.len());
@@ -525,14 +535,19 @@ mod kani_harness {
     }
 
     /// This test verifies that all (!) possible packet construction requests can be handled
-    /// without panics. Here, we do not touch the data field, to prevent exponential blow-up of the
-    /// proof pipeline. Since the packet constructor performs no actions on the packet data field
-    /// beyond returning a reference to it, this makes for a strong proof about the safety of this
-    /// function.
+    /// without panics when working with a fixed-size buffer that does not permit all possible
+    /// packet size requests. Here, we do not touch the data field, to prevent exponential blow-up
+    /// of the proof pipeline. Since the packet constructor performs no actions on the packet data
+    /// field beyond returning a reference to it, this makes for a strong proof about the safety of
+    /// this function.
+    ///
+    /// The buffer size is rather arbitrarily chosen to be 1024. This covers a significant amount
+    /// of valid packet sizes, but also ensures that the "error path" is covered, where the
+    /// requested packet is larger than the available buffer.
     #[kani::proof]
     fn packet_construction() {
-        const BYTES: usize = 16;
-        let mut bytes = [kani::any(); BYTES];
+        let mut bytes = [kani::any(); 1024];
+        let maximum_packet_length = bytes.len();
         let packet_type = kani::any();
         let secondary_header_flag = kani::any();
         let apid = Apid::any_apid();
@@ -553,7 +568,7 @@ mod kani_harness {
         // First, we verify that all valid requests result in a returned packet.
         let valid_request = packet_data_length != 0
             && (packet_data_length as usize)
-                <= (BYTES - SpacePacket::primary_header_size() as usize);
+                <= (maximum_packet_length - SpacePacket::primary_header_size() as usize);
         if valid_request {
             assert!(packet.is_ok());
         }
@@ -566,7 +581,7 @@ mod kani_harness {
         // These checks ensure that any returned packet is indeed consistent with the requested
         // packet header information.
         if let Ok(packet) = packet {
-            assert!(packet.packet_length() <= BYTES);
+            assert!(packet.packet_length() <= maximum_packet_length);
             assert_eq!(
                 packet.packet_data_field().len(),
                 packet.packet_data_length()
