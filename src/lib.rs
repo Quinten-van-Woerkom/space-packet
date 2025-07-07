@@ -582,7 +582,9 @@ mod kani_harness {
     }
 }
 
-/// Test generated for harness `kani_harness::packet_construction` after assertion failure.
+/// Test generated for harness `kani_harness::packet_construction` after assertion failure. Test
+/// case initially failed on resizing the packet to the proper length when a larger byte buffer was
+/// passed than what was covered by the packet contents.
 #[test]
 fn kani_failure1() {
     const BYTES: usize = 16;
