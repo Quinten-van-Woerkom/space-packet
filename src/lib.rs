@@ -619,8 +619,7 @@ fn kani_failure1() {
         assert_eq!(
             packet.packet_data_field().len(),
             packet.packet_data_length(),
-            "Packet data field length does not match packet data field as stored: {:?}",
-            packet
+            "Packet data field length does not match packet data field as stored: {packet:?}"
         );
         assert!(packet.apid().0 <= 0b0000_0111_1111_1111);
     }
