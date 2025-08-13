@@ -3,6 +3,9 @@ name = "ccsds-space-packet"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+nightly = []
+
 [dev-dependencies]
 rand = { version = "0.9.1", features = ["small_rng"], default-features = false }
 
@@ -12,6 +15,7 @@ debug-assertions = false
 overflow-checks = false
 
 [dependencies]
+allocator-api2 = "0.3.0"
 zerocopy = { version = "0.8.26", features = ["derive"] }
 
 [lints.rust]
