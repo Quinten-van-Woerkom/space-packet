@@ -7,8 +7,12 @@
 //!
 //! Readers of the code are advised to start with the `PacketAssembly`, `PacketTransfer`,
 //! `PacketReception` and `PacketExtraction` traits. These describe the interfaces that application
-//! processes supporting the Space Packet Protocol are expected to expose. The underlying parsing
-//! and semantic checking functionality is found in the actual `SpacePacket` implementation.
+//! processes supporting the Space Packet Protocol are expected to expose.
+//!
+//! Tested and formally-verified implementations of the underlying parsing and semantic checking
+//! functionality needed to handle Space Packets is found in the actual `SpacePacket`
+//! implementation. This functionality is included in the hope that it helps write simple and
+//! robust SPP implementations.
 
 use zerocopy::byteorder::network_endian;
 use zerocopy::{ByteEq, CastError, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
