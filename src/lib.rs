@@ -4,17 +4,100 @@
 //! concerns itself only with parsing and construction of CCSDS Space Packets, as that is
 //! independent of the precise implementation. Endpoint functionality, i.e., actually consuming and
 //! responding to the packet contents is implementation specific, and hence out of scope.
+//!
+//! Readers of the code are advised to start with the `PacketAssembly`, `PacketTransfer`,
+//! `PacketReception` and `PacketExtraction` traits. These describe the interfaces that application
+//! processes supporting the Space Packet Protocol are expected to expose. The underlying parsing
+//! and semantic checking functionality is found in the actual `SpacePacket` implementation.
 
 use zerocopy::byteorder::network_endian;
 use zerocopy::{ByteEq, CastError, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
+/// The `PacketAssembly` trait describes the "Packet Assembly" function from the CCSDS 133.0-B-2
+/// Space Packet Protocol recommended standard. This function concerns the ability of some protocol
+/// entity to build Space Packets from octet strings (packet data fields). It is the sending
+/// counterpart of the `PacketExtraction` trait.
+///
+/// We deviate slightly from the strict "Packet Assembly" function definition in permitting
+/// population of the octet string only after assembly of a packet with given packet data field
+/// length. This is useful, because it means that no copy is needed to prepend the Space Packet
+/// header to the data field, which saves a `memcpy`.
+pub trait PacketAssembly: PacketTransfer {
+    /// An error may be returned if the requested Space Packet could not be assembled. An
+    /// appropriate default value would be `SpacePacketAssemblyError`. However, it is also possible
+    /// that the underlying implementation raises an application-specific error, as could be the
+    /// case when the `PacketAssembly` function has run out of memory.
+    type Error;
+
+    /// Generates Space Packets from octet strings. See CCSDS 133.0-B-2 Section 4.2.2 "Packet
+    /// Assembly Function". A secondary header indicator must be passed as well as the requested
+    /// data field size, but all other packet header contents must be derived from context. In
+    /// particular, the Packet Assembly function shall itself keep track of the source sequence
+    /// count of packets.
+    ///
+    /// It is not possible to "accidentally" send the Space Packet while it is still being
+    /// constructed, because a mutable reference is returned. How this sending is done is
+    /// implementation-defined (using the `PacketTransfer::transfer()` trait method), but at the
+    /// very least it cannot (in safe Rust) be done without dropping the mutable reference first.
+    /// After all, the memory that the sending function must read from (`self`) is still being
+    /// aliased with a mutable reference.
+    fn assemble(
+        &mut self,
+        secondary_header: SecondaryHeaderFlag,
+        packet_data_length: usize,
+    ) -> Result<&mut SpacePacket, Self::Error>;
+}
+
+/// The `PacketTransfer` trait describes the "Packet Transfer" function from the CCSDS 133.0-B-2
+/// Space Packet Protocol recommended standard. It concerns the ability of some protocol entity to
+/// transfer packets towards the appropriate managed data path. It is the sending counterpart of
+/// the `PacketReception` trait.
+pub trait PacketTransfer {
+    /// Inspects an incoming or newly-created Space Packet (its APID, in particular) to determine
+    /// the target packet service entity at the receiving end. Routes this packet towards the
+    /// appropriate managed data path using a service of the underlying OSI reference model layers.
+    fn transfer(&mut self, packet: &SpacePacket);
+}
+
+/// The `PacketReception` trait describes the "Packet Reception" function from the CCSDS 133.0-B-2
+/// Space Packet Protocol recommended standard. It concerns the ability of some protocol entity to
+/// receive and demultiplex Space Packets from the underlying subnetwork. It is the receiving
+/// counterpart of the `PacketTransfer` trait.
+pub trait PacketReception {
+    /// Inspects an incoming Space Packet from the underlying subnetwork. Shall demultiplex, if
+    /// applicable, the received packets based on the contained APIDs.
+    fn receive(&mut self) -> Result<&SpacePacket, InvalidSpacePacket>;
+}
+
+/// The `PacketExtraction` trait describes the "Packet Extraction" function from the CCSDS
+/// 133.0-B-2 Space Packet Protocol recommended standard. It concerns the ability of some protocol
+/// entity to extract service data units (SDUs) from Space Packets. Effectivelly, it is little more
+/// than unwrapping the received packet into its data field.
+pub trait PacketExtraction: PacketReception {
+    /// In addition to the octet string contained in a packet, the Packet Extraction function shall
+    /// check the continuity of the Packet Sequence Count to determine if one or more packets have
+    /// been lost during transmission. If this is the case, an associated `DataLossIndicator` value
+    /// may be returned to indicate this. However, this type may also be the unit type, if such
+    /// functionality is not supported.
+    type DataLossIndicator;
+
+    /// The Packet Extraction function shall extract Service Data Units (SDUs), i.e., packet data
+    /// fields, from received Space Packets. Shall returned the wrapped packet data field, a flag
+    /// indicating whether a secondary header is present (at the start of the data field) and an
+    /// optional Data Loss Indicator.
+    #[allow(clippy::type_complexity)]
+    fn extract(
+        &mut self,
+    ) -> Result<(&[u8], SecondaryHeaderFlag, Self::DataLossIndicator), InvalidSpacePacket>;
+}
 
 /// Space packets are implemented as dynamically-sized structs that contain the primary header as
 /// their first field, followed by the packet data as pure byte array. In this manner,
 /// deserialization can be reduced to a simple byte cast followed by interpretation of the primary
 /// header - without any data copies needed. This is useful for high-throughput applications, and
-/// ensures that no allocation or significant additional memory is needed to consume space packets.
+/// ensures that no allocation or significant additional memory is needed to consume Space Packets.
 ///
-/// This does also mean that space packets may only be handled by reference. In the context of this
+/// This does also mean that Space Packets may only be handled by reference. In the context of this
 /// crate that helps enforce that no spurious copies can be made of the user data (which may be
 /// rather large and would incur additional allocations), albeit at the cost of some convenience.
 ///
@@ -30,13 +113,13 @@ pub struct SpacePacket {
 }
 
 impl SpacePacket {
-    /// Attempts to parse a space packet from a given byte slice. If this fails, a reason is
+    /// Attempts to parse a Space Packet from a given byte slice. If this fails, a reason is
     /// given for this failure. Shall never panic: rather, an error enum is returned explaining why
-    /// the given octet string is not a valid space packet.
+    /// the given octet string is not a valid Space Packet.
     ///
     /// This deserialization is fully zero-copy. The `&SpacePacket` returned on success directly
-    /// references the input slice `bytes`, but is merely validated to be a valid space packet.
-    pub fn deserialize(bytes: &[u8]) -> Result<&SpacePacket, InvalidSpacePacket> {
+    /// references the input slice `bytes`, but is merely validated to be a valid Space Packet.
+    pub fn extract(bytes: &[u8]) -> Result<&SpacePacket, InvalidSpacePacket> {
         // First, we simply cast the packet into a header and check that the byte buffer permits
         // this: i.e., if it is large enough to contain a header.
         let primary_header = match SpacePacket::ref_from_bytes(bytes) {
@@ -54,7 +137,7 @@ impl SpacePacket {
         primary_header.validate()?;
 
         // Finally, we truncate the passed byte slice to exactly accommodate the specified space
-        // packet and construct a space packet that consists of only this memory region.
+        // packet and construct a Space Packet that consists of only this memory region.
         let packet_size = primary_header.packet_data_length() + Self::primary_header_size();
         let packet_bytes = &bytes[..packet_size];
         let packet = match SpacePacket::ref_from_bytes(packet_bytes) {
@@ -69,7 +152,7 @@ impl SpacePacket {
     /// `SpacePacketConstructionError` if this is not possible for whatever reason. Note that the
     /// data field is only "allocated" on the buffer, but never further populated. That may be done
     /// after the SpacePacket is otherwise fully constructed.
-    pub fn construct(
+    pub fn assemble(
         buffer: &mut [u8],
         packet_type: PacketType,
         secondary_header_flag: SecondaryHeaderFlag,
@@ -77,18 +160,18 @@ impl SpacePacket {
         sequence_flag: SequenceFlag,
         sequence_count: PacketSequenceCount,
         packet_data_length: u16,
-    ) -> Result<&mut SpacePacket, SpacePacketConstructionError> {
+    ) -> Result<&mut SpacePacket, SpacePacketAssemblyError> {
         // As per the CCSDS Space Packet Protocol standard, we must reject requests for data field
         // lengths of zero.
         if packet_data_length == 0 {
-            return Err(SpacePacketConstructionError::EmptyDataFieldRequested);
+            return Err(SpacePacketAssemblyError::EmptyDataFieldRequested);
         }
 
         // Verify that the packet length as requested may actually fit on the supplied buffer.
         let packet_length = SpacePacket::primary_header_size() + packet_data_length as usize;
         let buffer_length = buffer.len();
         if packet_length > buffer_length {
-            return Err(SpacePacketConstructionError::BufferTooSmall {
+            return Err(SpacePacketAssemblyError::BufferTooSmall {
                 buffer_length,
                 packet_length,
             });
@@ -112,8 +195,8 @@ impl SpacePacket {
         Ok(packet)
     }
 
-    /// Validates that the space packet is valid, in that its fields are coherent. In particular,
-    /// it is verified that the version number is that of a supported space packet, and that the
+    /// Validates that the Space Packet is valid, in that its fields are coherent. In particular,
+    /// it is verified that the version number is that of a supported Space Packet, and that the
     /// packet size as stored in the header is not larger than the packet size as permitted by the
     /// actual memory span of which the packet consists.
     ///
@@ -142,13 +225,13 @@ impl SpacePacket {
         Ok(())
     }
 
-    /// Returns the size of a space packet primary header, in bytes. In the version that is
+    /// Returns the size of a Space Packet primary header, in bytes. In the version that is
     /// presently implemented, that is always 6 bytes.
     pub const fn primary_header_size() -> usize {
         6
     }
 
-    /// Since the space packet protocol may technically support alternative packet structures in
+    /// Since the Space Packet protocol may technically support alternative packet structures in
     /// future versions, the 3-bit packet version field may not actually contain a "correct" value.
     pub fn packet_version(&self) -> PacketVersionNumber {
         use core::ops::Shr;
@@ -181,7 +264,7 @@ impl SpacePacket {
 
     /// Denotes whether the packet contains a secondary header. If no user field is present, the
     /// secondary header is mandatory (presumably, to ensure that some data is always transferred,
-    /// considering the space packet header itself contains no meaningful data).
+    /// considering the Space Packet header itself contains no meaningful data).
     pub fn secondary_header_flag(&self) -> SecondaryHeaderFlag {
         match (self.packet_identification.as_bytes()[0] & 0x08) == 0x08 {
             true => SecondaryHeaderFlag::Present,
@@ -231,7 +314,7 @@ impl SpacePacket {
     }
 
     /// The packet sequence count is unique per APID and denotes the sequential binary count of
-    /// each space packet (generated per APID). For telecommands (i.e., with packet type 1) this
+    /// each Space Packet (generated per APID). For telecommands (i.e., with packet type 1) this
     /// may also be a "packet name" that identifies the telecommand packet within its
     /// communications session.
     pub fn packet_sequence_count(&self) -> PacketSequenceCount {
@@ -285,12 +368,12 @@ impl SpacePacket {
         self.as_bytes().len()
     }
 
-    /// Returns a reference to the packet data field contained in this space packet.
+    /// Returns a reference to the packet data field contained in this Space Packet.
     pub fn packet_data_field(&self) -> &[u8] {
         &self.data_field
     }
 
-    /// Returns a mutable reference to the packet data field contained in this space packet.
+    /// Returns a mutable reference to the packet data field contained in this Space Packet.
     pub fn packet_data_field_mut(&mut self) -> &mut [u8] {
         &mut self.data_field
     }
@@ -315,13 +398,13 @@ impl core::fmt::Debug for SpacePacket {
     }
 }
 
-/// Representation of the set of errors that may be encountered while deserializing a space packet.
+/// Representation of the set of errors that may be encountered while deserializing a Space Packet.
 /// Marked as non-exhaustive to permit extension with additional semantic errors in the future
 /// without breaking API.
 #[non_exhaustive]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum InvalidSpacePacket {
-    /// Returned when a byte slice is too small to contain any space packet (i.e., is smaller than
+    /// Returned when a byte slice is too small to contain any Space Packet (i.e., is smaller than
     /// a header with a single-byte user data field).
     SliceTooSmallForSpacePacketHeader { length: usize },
     /// Returned when a slice does not have a known and supported packet version. For convenience,
@@ -335,19 +418,19 @@ pub enum InvalidSpacePacket {
     },
 }
 
-/// Representation of the set of errors that may be encountered while constructing a space packet.
+/// Representation of the set of errors that may be encountered while constructing a Space Packet.
 /// Marked as non-exhaustive to permit extension with additional semantic errors in the future
 /// without breaking API.
 #[non_exhaustive]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub enum SpacePacketConstructionError {
+pub enum SpacePacketAssemblyError {
     /// Returned when the underlying buffer does not have sufficient bytes to contain a given space
     /// packet.
     BufferTooSmall {
         buffer_length: usize,
         packet_length: usize,
     },
-    /// As per the CCSDS standard, space packets shall have at least one byte in their data field.
+    /// As per the CCSDS standard, Space Packets shall have at least one byte in their data field.
     /// Hence, requests for an empty data field must be rejected.
     EmptyDataFieldRequested,
 }
@@ -361,16 +444,16 @@ pub enum InvalidPacketDataLength {
     },
 }
 
-impl From<InvalidPacketDataLength> for SpacePacketConstructionError {
+impl From<InvalidPacketDataLength> for SpacePacketAssemblyError {
     fn from(value: InvalidPacketDataLength) -> Self {
         match value {
             InvalidPacketDataLength::EmptyDataField => {
-                SpacePacketConstructionError::EmptyDataFieldRequested
+                SpacePacketAssemblyError::EmptyDataFieldRequested
             }
             InvalidPacketDataLength::LargerThanPacketDataBuffer {
                 packet_data_length,
                 buffer_length,
-            } => SpacePacketConstructionError::BufferTooSmall {
+            } => SpacePacketAssemblyError::BufferTooSmall {
                 buffer_length: buffer_length + SpacePacket::primary_header_size(),
                 packet_length: packet_data_length as usize + SpacePacket::primary_header_size(),
             },
@@ -378,13 +461,13 @@ impl From<InvalidPacketDataLength> for SpacePacketConstructionError {
     }
 }
 
-/// The packet version number represents the version of the space packet protocol that is used. In
+/// The packet version number represents the version of the Space Packet protocol that is used. In
 /// the version presently implemented, this is defined to be zeroes.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct PacketVersionNumber(u8);
 
 impl PacketVersionNumber {
-    /// The space packet protocol version presently implemented in this crate is based on issue 2
+    /// The Space Packet protocol version presently implemented in this crate is based on issue 2
     /// of the CCSDS SPP blue book, which encompasses only the Version 1 CCSDS Packet, indicated by
     /// a version number of 0. Other packet structures may be added in the future.
     pub fn is_supported(&self) -> bool {
@@ -409,7 +492,7 @@ pub enum PacketType {
 
 /// Denotes whether the packet contains a secondary header. If no user field is present, the
 /// secondary header is mandatory (presumably, to ensure that some data is always transferred,
-/// considering the space packet header itself contains no meaningful data).
+/// considering the Space Packet header itself contains no meaningful data).
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
 pub enum SecondaryHeaderFlag {
@@ -446,7 +529,7 @@ impl Apid {
         }
     }
 
-    /// A special APID value (0x7ff) is reserved for idle space packets, i.e., packets that do not
+    /// A special APID value (0x7ff) is reserved for idle Space Packets, i.e., packets that do not
     /// carry any actual data.
     pub fn is_idle(&self) -> bool {
         self.0 == 0x7ff
@@ -466,7 +549,7 @@ pub enum SequenceFlag {
 }
 
 /// The packet sequence count is unique per APID and denotes the sequential binary count of
-/// each space packet (generated per APID). For telecommands (i.e., with packet type 1) this
+/// each Space Packet (generated per APID). For telecommands (i.e., with packet type 1) this
 /// may also be a "packet name" that identifies the telecommand packet within its
 /// communications session.
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug, Default)]
@@ -524,7 +607,7 @@ mod kani_harness {
         bytes[5] = kani::any();
         bytes[6] = kani::any();
 
-        let packet = SpacePacket::deserialize(&bytes);
+        let packet = SpacePacket::extract(&bytes);
         if let Ok(packet) = packet {
             assert!(packet.packet_length() <= bytes.len());
             assert_eq!(
@@ -556,7 +639,7 @@ mod kani_harness {
         let sequence_count = PacketSequenceCount::any_packet_sequence_count();
         let packet_data_length = kani::any();
 
-        let packet = SpacePacket::construct(
+        let packet = SpacePacket::assemble(
             &mut bytes,
             packet_type,
             secondary_header_flag,
@@ -605,7 +688,7 @@ mod kani_harness {
 fn kani_failure1() {
     const BYTES: usize = 16;
     let mut bytes = [0; BYTES];
-    let packet = SpacePacket::construct(
+    let packet = SpacePacket::assemble(
         &mut bytes,
         PacketType::Telecommand,
         SecondaryHeaderFlag::Present,
@@ -639,7 +722,7 @@ fn deserialize_trivial_packet() {
         0b0000_0000u8,
         0b0000_0000u8,
     ];
-    let packet = SpacePacket::deserialize(bytes).unwrap();
+    let packet = SpacePacket::extract(bytes).unwrap();
 
     assert_eq!(packet.packet_length(), 7);
     assert_eq!(
@@ -660,7 +743,7 @@ fn deserialize_trivial_packet() {
 #[test]
 fn serialize_trivial_packet() {
     let mut bytes = [0u8; 7];
-    let packet = SpacePacket::construct(
+    let packet = SpacePacket::assemble(
         &mut bytes,
         PacketType::Telemetry,
         SecondaryHeaderFlag::Present,
@@ -696,7 +779,7 @@ fn serialize_trivial_packet() {
     );
 }
 
-/// Roundtrip serialization and subsequent deserialization of space packets shall result in exactly
+/// Roundtrip serialization and subsequent deserialization of Space Packets shall result in exactly
 /// identical byte slices for any valid (!) input. We test this by generating 10,000 random space
 /// packets and seeing whether they remain identical through this transformation.
 ///
@@ -732,7 +815,7 @@ fn roundtrip() {
 
         let packet_data_length = (rng.next_u32() % (buffer.len() as u32 - 7)) as u16 + 1;
 
-        let space_packet = SpacePacket::construct(
+        let space_packet = SpacePacket::assemble(
             &mut buffer,
             packet_type,
             secondary_header_flag,
@@ -804,7 +887,7 @@ fn roundtrip() {
 #[test]
 fn empty_packet_data_field() {
     let mut bytes = [0u8; 7];
-    let result = SpacePacket::construct(
+    let result = SpacePacket::assemble(
         &mut bytes,
         PacketType::Telemetry,
         SecondaryHeaderFlag::Present,
@@ -815,17 +898,17 @@ fn empty_packet_data_field() {
     );
     assert_eq!(
         result,
-        Err(SpacePacketConstructionError::EmptyDataFieldRequested)
+        Err(SpacePacketAssemblyError::EmptyDataFieldRequested)
     );
 }
 
-/// When the buffer to construct a space packet in is too small to contain a packet primary header,
+/// When the buffer to construct a Space Packet in is too small to contain a packet primary header,
 /// this shall be caught and an error shall be returned, independent of the actual packet request.
 #[test]
 fn buffer_too_small_for_header_construction() {
     let mut buffer = [0u8; 5];
     let buffer_length = buffer.len();
-    let result = SpacePacket::construct(
+    let result = SpacePacket::assemble(
         &mut buffer,
         PacketType::Telemetry,
         SecondaryHeaderFlag::Present,
@@ -836,14 +919,14 @@ fn buffer_too_small_for_header_construction() {
     );
     assert_eq!(
         result,
-        Err(SpacePacketConstructionError::BufferTooSmall {
+        Err(SpacePacketAssemblyError::BufferTooSmall {
             buffer_length,
             packet_length: 7
         })
     );
 }
 
-/// When the buffer to construct a space packet in is too small to contain the full packet, an
+/// When the buffer to construct a Space Packet in is too small to contain the full packet, an
 /// error shall be returned stating as such.
 #[test]
 fn buffer_too_small_for_packet_construction() {
@@ -856,7 +939,7 @@ fn buffer_too_small_for_packet_construction() {
     for _ in 0..1000 {
         // Generate a pseudo-random packet data length between 128 and u16::MAX.
         let packet_data_length = (rng.next_u32() % (u16::MAX - 128) as u32) as u16 + 128;
-        let result = SpacePacket::construct(
+        let result = SpacePacket::assemble(
             &mut buffer,
             PacketType::Telemetry,
             SecondaryHeaderFlag::Present,
@@ -867,7 +950,7 @@ fn buffer_too_small_for_packet_construction() {
         );
         assert_eq!(
             result,
-            Err(SpacePacketConstructionError::BufferTooSmall {
+            Err(SpacePacketAssemblyError::BufferTooSmall {
                 buffer_length,
                 packet_length: packet_data_length as usize + SpacePacket::primary_header_size(),
             })
@@ -889,8 +972,8 @@ fn buffer_too_small_for_parsed_packet() {
         // packet will fit on a 256-byte buffer.
         let packet_data_length = (rng.next_u32() % 128) as u16 + 122;
 
-        // Construct a valid space packet.
-        let packet = SpacePacket::construct(
+        // Construct a valid Space Packet.
+        let packet = SpacePacket::assemble(
             &mut buffer,
             PacketType::Telemetry,
             SecondaryHeaderFlag::Present,
@@ -905,7 +988,7 @@ fn buffer_too_small_for_parsed_packet() {
         // be invalid (the stored packet data length will always correspond with a packet larger
         // than 127 bytes).
         let bytes = &packet.as_bytes()[..127];
-        let result = SpacePacket::deserialize(bytes);
+        let result = SpacePacket::extract(bytes);
         assert_eq!(
             result,
             Err(InvalidSpacePacket::PartialPacket {
