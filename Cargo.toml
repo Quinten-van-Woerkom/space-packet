@@ -11,11 +11,6 @@ std = []
 [dev-dependencies]
 rand = { version = "0.9.1", features = ["small_rng"], default-features = false }
 
-[profile.dev] # Changes needed to support no_panic
-opt-level = 2
-debug-assertions = false
-overflow-checks = false
-
 [dependencies]
 zerocopy = { version = "0.8.26", features = ["derive"] }
 
