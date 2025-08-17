@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 //! Generic implementation of the CCSDS 133.0-B-2 Space Packet Protocol (SPP). That is, this crate
