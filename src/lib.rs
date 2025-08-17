@@ -85,7 +85,7 @@ pub trait PacketReception {
     /// so, returns a reference to it. Need not perform any checking, such as data loss checks:
     /// that may be done by the receiving party.
     ///
-    /// After reception, the space packet shall be removed from the packet receptor: on future
+    /// After reception, the Space Packet shall be removed from the packet receptor: on future
     /// polls (for the same `self`), it shall no longer be returned.
     fn receive(&mut self) -> Option<&SpacePacket>;
 }
@@ -99,7 +99,7 @@ pub trait PacketExtraction {
     type DataLossIndicator;
 
     /// Unpacks the given Space Packet into its underlying packet data field. Shall also return
-    /// whether there was a mismatch between the expected and actual space packet sequence
+    /// whether there was a mismatch between the expected and actual Space Packet sequence
     /// counters: if so, returns an appropriate data loss indicator. Finally, the secondary header
     /// flag as contained in the primary header may also be returned.
     fn extract<'a>(
@@ -519,7 +519,7 @@ pub enum PacketAssemblyError {
     EmptyDataFieldRequested,
 }
 
-/// This error may be returned when setting the data field of some newly-constructed space packet
+/// This error may be returned when setting the data field of some newly-constructed Space Packet
 /// if the requested packet data length is 0 (which is generally illegal) or if the requested
 /// packet data length does not fit in the buffer on which the packet must be stored.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
