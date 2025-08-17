@@ -297,6 +297,12 @@ impl SpacePacket {
             });
         }
 
+        // Idle packets may not contain a secondary header field. If we do find that the secondary
+        // header flag is set, we must reject the packet.
+        if self.apid().is_idle() && self.secondary_header_flag() == SecondaryHeaderFlag::Present {
+            return Err(InvalidSpacePacket::IdlePacketWithSecondaryHeader);
+        }
+
         Ok(())
     }
 
@@ -491,6 +497,9 @@ pub enum InvalidSpacePacket {
         packet_size: usize,
         buffer_size: usize,
     },
+    /// Returned when the Space Packet is idle (has an 'all ones' APID) but also contains a
+    /// secondary header. This is forbidden by CCSDS 133.0-B-2.
+    IdlePacketWithSecondaryHeader,
 }
 
 /// Representation of the set of errors that may be encountered while constructing a Space Packet.
