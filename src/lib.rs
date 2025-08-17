@@ -32,7 +32,7 @@ pub trait PacketAssembly {
     /// sequence count of packets for a given packet identification (version, packet type, and
     /// APID), but all other elements must be provided by the service user. On top, since the
     /// Packet Assembly function is used in tandem with the Octet String service (which does not
-    /// permit segmentation), the packet sequence flags shall be 0b00 ("Unsegmented").
+    /// permit segmentation), the packet sequence flags shall be 0b11 ("Unsegmented").
     ///
     /// An error shall be returned if an empty packet data field is requested, since that indicates
     /// an error on the user input side. In all other cases, no error may be returned - though
