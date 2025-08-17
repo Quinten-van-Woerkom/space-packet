@@ -3,14 +3,6 @@
 version = 4
 
 [[package]]
-name = "ccsds-space-packet"
-version = "0.1.0"
-dependencies = [
- "rand",
- "zerocopy",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -42,6 +34,14 @@ name = "rand_core"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
+
+[[package]]
+name = "space-packet"
+version = "0.1.0"
+dependencies = [
+ "rand",
+ "zerocopy",
+]
 
 [[package]]
 name = "syn"
