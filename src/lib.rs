@@ -151,9 +151,7 @@ pub trait PacketExtraction {
 #[repr(C, packed)]
 #[derive(ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
 pub struct SpacePacket {
-    packet_identification: network_endian::U16,
-    packet_sequence_control: network_endian::U16,
-    data_length: network_endian::U16,
+    primary_header: SpacePacketPrimaryHeader,
     data_field: [u8],
 }
 
@@ -260,13 +258,19 @@ impl SpacePacket {
         let packet = SpacePacket::mut_from_bytes(packet_bytes).unwrap();
 
         // Initialize header bytes to valid values.
-        packet.set_apid(apid);
-        packet.initialize_packet_version();
-        packet.set_packet_type(packet_type);
-        packet.set_secondary_header_flag(secondary_header_flag);
-        packet.set_sequence_flag(sequence_flag);
-        packet.set_packet_sequence_count(sequence_count);
-        packet.set_packet_data_length(packet_data_length)?;
+        packet.primary_header.set_apid(apid);
+        packet.primary_header.initialize_packet_version();
+        packet.primary_header.set_packet_type(packet_type);
+        packet
+            .primary_header
+            .set_secondary_header_flag(secondary_header_flag);
+        packet.primary_header.set_sequence_flag(sequence_flag);
+        packet
+            .primary_header
+            .set_packet_sequence_count(sequence_count);
+        packet
+            .primary_header
+            .set_packet_data_length(packet_data_length)?;
 
         Ok(packet)
     }
@@ -279,12 +283,8 @@ impl SpacePacket {
     /// Note that this concerns semantic validity. The implementation shall not depend on this for
     /// memory safety.
     fn validate(&self) -> Result<(), InvalidSpacePacket> {
-        // Then, we verify that the packet version found in the packet header is a version that is
-        // supported by this library.
-        let version = self.packet_version();
-        if !version.is_supported() {
-            return Err(InvalidSpacePacket::UnsupportedPacketVersion { version });
-        }
+        // First, we check that the primary header is valid and consistent.
+        self.primary_header.validate()?;
 
         // The packet header contains an indication of the actual amount of bytes stored in the packet.
         // If this is larger than the size of the actual memory contents, only a partial packet was
@@ -296,6 +296,162 @@ impl SpacePacket {
                 packet_size,
                 buffer_size,
             });
+        }
+
+        Ok(())
+    }
+
+    /// Returns the size of a Space Packet primary header, in bytes. In the version that is
+    /// presently implemented, that is always 6 bytes.
+    pub const fn primary_header_size() -> usize {
+        6
+    }
+
+    /// Since the Space Packet protocol may technically support alternative packet structures in
+    /// future versions, the 3-bit packet version field may not actually contain a "correct" value.
+    pub fn packet_version(&self) -> PacketVersionNumber {
+        self.primary_header.packet_version()
+    }
+
+    /// The packet type denotes whether a packet is a telecommand (request) or telemetry (report)
+    /// packet. Note that the exact definition of telecommand and telemetry may differ per system,
+    /// and indeed the "correct" value here may differ per project.
+    pub fn packet_type(&self) -> PacketType {
+        self.primary_header.packet_type()
+    }
+
+    /// Sets the packet type to the given value.
+    pub fn set_packet_type(&mut self, packet_type: PacketType) {
+        self.primary_header.set_packet_type(packet_type)
+    }
+
+    /// Denotes whether the packet contains a secondary header. If no user field is present, the
+    /// secondary header is mandatory (presumably, to ensure that some data is always transferred,
+    /// considering the Space Packet header itself contains no meaningful data).
+    pub fn secondary_header_flag(&self) -> SecondaryHeaderFlag {
+        self.primary_header.secondary_header_flag()
+    }
+
+    /// Updates the value of the secondary header flag with the provided value.
+    pub fn set_secondary_header_flag(&mut self, secondary_header_flag: SecondaryHeaderFlag) {
+        self.primary_header
+            .set_secondary_header_flag(secondary_header_flag)
+    }
+
+    /// Returns the application process ID stored in the packet. The actual meaning of this APID
+    /// field may differ per implementation: technically, it only represents "some" data path.
+    /// In practice, it will often be a identifier for a data channel, the packet source, or the
+    /// packet destination.
+    pub fn apid(&self) -> Apid {
+        self.primary_header.apid()
+    }
+
+    /// Sets the APID used to route the packet to the given value.
+    pub fn set_apid(&mut self, apid: Apid) {
+        self.primary_header.set_apid(apid)
+    }
+
+    /// Sequence flags may be used to indicate that the data contained in a packet is only part of
+    /// a larger set of application data.
+    pub fn sequence_flag(&self) -> SequenceFlag {
+        self.primary_header.sequence_flag()
+    }
+
+    /// Sets the sequence flag to the provided value.
+    pub fn set_sequence_flag(&mut self, sequence_flag: SequenceFlag) {
+        self.primary_header.set_sequence_flag(sequence_flag)
+    }
+
+    /// The packet sequence count is unique per APID and denotes the sequential binary count of
+    /// each Space Packet (generated per APID). For telecommands (i.e., with packet type 1) this
+    /// may also be a "packet name" that identifies the telecommand packet within its
+    /// communications session.
+    pub fn packet_sequence_count(&self) -> PacketSequenceCount {
+        self.primary_header.packet_sequence_count()
+    }
+
+    /// Sets the packet sequence count to the provided value. This value must be provided by an
+    /// external counter and is not provided at a Space Packet type level because it might differ
+    /// between packet streams.
+    pub fn set_packet_sequence_count(&mut self, sequence_count: PacketSequenceCount) {
+        self.primary_header
+            .set_packet_sequence_count(sequence_count)
+    }
+
+    /// The packet data length field represents the length of the associated packet data field.
+    /// However, it is not stored directly: rather, the "length count" is stored, which is the
+    /// packet data length minus one.
+    pub fn packet_data_length(&self) -> usize {
+        self.primary_header.packet_data_length()
+    }
+
+    /// Sets the packet data length field to the provided value. Note that the given value is not
+    /// stored directly, but rather decremented by one first. Accordingly, and as per the CCSDS
+    /// Space Packet Protocol standard, packet data lengths of 0 are not allowed.
+    pub fn set_packet_data_length(
+        &mut self,
+        packet_data_length: u16,
+    ) -> Result<(), InvalidPacketDataLength> {
+        if packet_data_length == 0 {
+            return Err(InvalidPacketDataLength::EmptyDataField);
+        }
+
+        let buffer_length = self.data_field.len();
+        if packet_data_length as usize > buffer_length {
+            return Err(InvalidPacketDataLength::LargerThanPacketDataBuffer {
+                packet_data_length,
+                buffer_length,
+            });
+        }
+
+        let stored_data_field_length = packet_data_length - 1;
+        self.primary_header
+            .data_length
+            .set(stored_data_field_length);
+        Ok(())
+    }
+
+    /// Returns the total length of the packet in bytes. Note the distinction from the packet data
+    /// length, which refers only to the length of the data field of the packet.
+    pub fn packet_length(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    /// Returns a reference to the packet data field contained in this Space Packet.
+    pub fn packet_data_field(&self) -> &[u8] {
+        &self.data_field
+    }
+
+    /// Returns a mutable reference to the packet data field contained in this Space Packet.
+    pub fn packet_data_field_mut(&mut self) -> &mut [u8] {
+        &mut self.data_field
+    }
+}
+
+/// Representation of only the fixed-size primary header part of a space packet. Used to construct
+/// generic space packets, but mostly useful in permitting composition of derived packet types,
+/// like PUS packets; otherwise, the dynamically-sized data field member would get in the way of
+/// including the primary header directly in derived packets.
+#[repr(C, packed)]
+#[derive(ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+pub struct SpacePacketPrimaryHeader {
+    packet_identification: network_endian::U16,
+    packet_sequence_control: network_endian::U16,
+    data_length: network_endian::U16,
+}
+
+impl SpacePacketPrimaryHeader {
+    /// Validates that the Space Packet primary header is valid, in that its fields are coherent.
+    /// In particular, it is verified that the version number is that of a supported Space Packet.
+    ///
+    /// Note that this concerns semantic validity. The implementation shall not depend on this for
+    /// memory safety.
+    fn validate(&self) -> Result<(), InvalidSpacePacket> {
+        // We verify that the packet version found in the packet header is a version that is
+        // supported by this library.
+        let version = self.packet_version();
+        if !version.is_supported() {
+            return Err(InvalidSpacePacket::UnsupportedPacketVersion { version });
         }
 
         // Idle packets may not contain a secondary header field. If we do find that the secondary
@@ -431,33 +587,9 @@ impl SpacePacket {
             return Err(InvalidPacketDataLength::EmptyDataField);
         }
 
-        let buffer_length = self.data_field.len();
-        if packet_data_length as usize > buffer_length {
-            return Err(InvalidPacketDataLength::LargerThanPacketDataBuffer {
-                packet_data_length,
-                buffer_length,
-            });
-        }
-
         let stored_data_field_length = packet_data_length - 1;
         self.data_length.set(stored_data_field_length);
         Ok(())
-    }
-
-    /// Returns the total length of the packet in bytes. Note the distinction from the packet data
-    /// length, which refers only to the length of the data field of the packet.
-    pub fn packet_length(&self) -> usize {
-        self.as_bytes().len()
-    }
-
-    /// Returns a reference to the packet data field contained in this Space Packet.
-    pub fn packet_data_field(&self) -> &[u8] {
-        &self.data_field
-    }
-
-    /// Returns a mutable reference to the packet data field contained in this Space Packet.
-    pub fn packet_data_field_mut(&mut self) -> &mut [u8] {
-        &mut self.data_field
     }
 }
 
