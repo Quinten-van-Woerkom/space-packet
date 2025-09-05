@@ -436,12 +436,23 @@ impl core::hash::Hash for SpacePacket {
     }
 }
 
+impl core::fmt::Debug for SpacePacket {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SpacePacket")
+            .field("primary_header", &self.primary_header)
+            .field("data_field", &&self.data_field)
+            .finish()
+    }
+}
+
 /// Representation of only the fixed-size primary header part of a space packet. Used to construct
 /// generic space packets, but mostly useful in permitting composition of derived packet types,
 /// like PUS packets; otherwise, the dynamically-sized data field member would get in the way of
 /// including the primary header directly in derived packets.
 #[repr(C)]
-#[derive(Copy, Clone, ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Hash)]
+#[derive(
+    Copy, Clone, Debug, ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Hash,
+)]
 pub struct SpacePacketPrimaryHeader {
     packet_identification: network_endian::U16,
     packet_sequence_control: network_endian::U16,
@@ -598,25 +609,6 @@ impl SpacePacketPrimaryHeader {
         let stored_data_field_length = packet_data_length - 1;
         self.data_length.set(stored_data_field_length);
         Ok(())
-    }
-}
-
-/// Because `SpacePacket` is `repr(packed)` and `SpacePacket::data_field` is unsized, the default
-/// `core::fmt::Debug` implementation cannot be derived.
-impl core::fmt::Debug for SpacePacket {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "SpacePacket {{ version number: {:?}, packet type: {:?}, secondary header flag: {:?}, APID: {:?}, sequence flags: {:?}, sequence count: {:?}, packet data length: {:?}, packet data: {:?} }}",
-            self.packet_version(),
-            self.packet_type(),
-            self.secondary_header_flag(),
-            self.apid(),
-            self.sequence_flag(),
-            self.packet_sequence_count(),
-            self.packet_data_length(),
-            self.packet_data_field(),
-        )
     }
 }
 
