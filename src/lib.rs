@@ -428,12 +428,19 @@ impl SpacePacket {
     }
 }
 
+impl core::hash::Hash for SpacePacket {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.primary_header.hash(state);
+        self.data_field.hash(state);
+    }
+}
+
 /// Representation of only the fixed-size primary header part of a space packet. Used to construct
 /// generic space packets, but mostly useful in permitting composition of derived packet types,
 /// like PUS packets; otherwise, the dynamically-sized data field member would get in the way of
 /// including the primary header directly in derived packets.
-#[repr(C, packed)]
-#[derive(ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
+#[derive(ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Hash)]
 pub struct SpacePacketPrimaryHeader {
     packet_identification: network_endian::U16,
     packet_sequence_control: network_endian::U16,
