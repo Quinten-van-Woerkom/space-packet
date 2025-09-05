@@ -15,6 +15,7 @@
 //! implementation. This functionality is included in the hope that it helps write simple and
 //! robust SPP implementations.
 
+use thiserror::Error;
 use zerocopy::byteorder::network_endian;
 use zerocopy::{ByteEq, CastError, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
@@ -440,7 +441,7 @@ impl core::hash::Hash for SpacePacket {
 /// like PUS packets; otherwise, the dynamically-sized data field member would get in the way of
 /// including the primary header directly in derived packets.
 #[repr(C)]
-#[derive(ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Hash)]
+#[derive(Copy, Clone, ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Hash)]
 pub struct SpacePacketPrimaryHeader {
     packet_identification: network_endian::U16,
     packet_sequence_control: network_endian::U16,
@@ -623,22 +624,28 @@ impl core::fmt::Debug for SpacePacket {
 /// Marked as non-exhaustive to permit extension with additional semantic errors in the future
 /// without breaking API.
 #[non_exhaustive]
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Error)]
 pub enum InvalidSpacePacket {
     /// Returned when a byte slice is too small to contain any Space Packet (i.e., is smaller than
     /// a header with a single-byte user data field).
+    #[error(
+        "buffer too small for space packet header (has {length} bytes, at least 6 are required)"
+    )]
     SliceTooSmallForSpacePacketHeader { length: usize },
     /// Returned when a slice does not have a known and supported packet version. For convenience,
     /// the packet version that is stored at the "conventional" (CCSDS packet version 0) is also
     /// returned, though it does not need to be meaningful in other packet versions.
+    #[error("unsupported CCSDS Space Packet version: {version:?}")]
     UnsupportedPacketVersion { version: PacketVersionNumber },
     /// Returned when the decoded packet is not fully contained in the passed buffer.
+    #[error("detected partial packet (buffer is {buffer_size} bytes, packet {packet_size})")]
     PartialPacket {
         packet_size: usize,
         buffer_size: usize,
     },
     /// Returned when the Space Packet is idle (has an 'all ones' APID) but also contains a
     /// secondary header. This is forbidden by CCSDS 133.0-B-2.
+    #[error("idle packet contains a secondary header, this is forbidden")]
     IdlePacketWithSecondaryHeader,
 }
 
@@ -646,25 +653,33 @@ pub enum InvalidSpacePacket {
 /// Marked as non-exhaustive to permit extension with additional semantic errors in the future
 /// without breaking API.
 #[non_exhaustive]
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Error)]
 pub enum PacketAssemblyError {
     /// Returned when the underlying buffer does not have sufficient bytes to contain a given space
     /// packet.
+    #[error(
+        "buffer too small for space packet (has {buffer_length} bytes, packet requires at least {packet_length})"
+    )]
     BufferTooSmall {
         buffer_length: usize,
         packet_length: usize,
     },
     /// As per the CCSDS standard, Space Packets shall have at least one byte in their data field.
     /// Hence, requests for an empty data field must be rejected.
+    #[error("empty data field requested, this is forbidden")]
     EmptyDataFieldRequested,
 }
 
 /// This error may be returned when setting the data field of some newly-constructed Space Packet
 /// if the requested packet data length is 0 (which is generally illegal) or if the requested
 /// packet data length does not fit in the buffer on which the packet must be stored.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Error)]
 pub enum InvalidPacketDataLength {
+    #[error("empty data field requested, this is forbidden")]
     EmptyDataField,
+    #[error(
+        "requested packet data length ({packet_data_length} bytes) is too large for buffer ({buffer_length} bytes)"
+    )]
     LargerThanPacketDataBuffer {
         packet_data_length: u16,
         buffer_length: usize,
