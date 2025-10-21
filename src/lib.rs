@@ -696,6 +696,7 @@ impl From<InvalidPacketDataLength> for PacketAssemblyError {
 /// The packet version number represents the version of the Space Packet protocol that is used. In
 /// the version presently implemented, this is defined to be zeroes.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[repr(transparent)]
 pub struct PacketVersionNumber(u8);
 
 impl PacketVersionNumber {
@@ -717,6 +718,7 @@ impl PacketVersionNumber {
 /// and indeed the "correct" value here may differ per project.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
+#[repr(u8)]
 pub enum PacketType {
     Telemetry = 0,
     Telecommand = 1,
@@ -727,6 +729,7 @@ pub enum PacketType {
 /// considering the Space Packet header itself contains no meaningful data).
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
+#[repr(u8)]
 pub enum SecondaryHeaderFlag {
     Absent = 0,
     Present = 1,
@@ -738,6 +741,7 @@ pub enum SecondaryHeaderFlag {
 /// packet destination.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
+#[repr(transparent)]
 pub struct Apid(u16);
 
 impl Apid {
@@ -766,12 +770,24 @@ impl Apid {
     pub fn is_idle(&self) -> bool {
         self.0 == 0x7ff
     }
+
+    /// Returns the APID as a regular 16-bit unsigned integer.
+    pub fn as_u16(&self) -> u16 {
+        self.0
+    }
+}
+
+impl From<Apid> for u16 {
+    fn from(value: Apid) -> Self {
+        value.0
+    }
 }
 
 /// Sequence flags may be used to indicate that the data contained in a packet is only part of
 /// a larger set of application data.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 #[cfg_attr(kani, derive(kani::Arbitrary))]
+#[repr(u8)]
 pub enum SequenceFlag {
     Continuation = 0b00,
     First = 0b01,
