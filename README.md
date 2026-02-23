@@ -39,13 +39,12 @@ let buffer = &mut [0u8; 128];
 // Construction happens in-place on this buffer: a `SpacePacket` is returned, or an appropriate
 // error to indicate construction failure.
 let packet = SpacePacket::construct(
-    buffer.as_mut(),
+    buffer[..14].as_mut(),
     PacketType::Telemetry,
     SecondaryHeaderFlag::Absent,
     Apid::new(42),
     SequenceFlag::Unsegmented,
     PacketSequenceCount::new(),
-    8
 ).unwrap();
 // Initializes the packet data field with some arbitrary values.
 for (index, byte) in packet.packet_data_field_mut().iter_mut().enumerate() {
