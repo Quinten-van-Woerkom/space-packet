@@ -17,7 +17,9 @@
 
 use thiserror::Error;
 use zerocopy::byteorder::network_endian;
-use zerocopy::{ByteEq, CastError, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+use zerocopy::{
+    ByteEq, ByteHash, CastError, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
+};
 
 /// The `PacketAssembly` trait describes the "Packet Assembly" function from the CCSDS 133.0-B-2
 /// Space Packet Protocol recommended standard. This function concerns the ability of some protocol
@@ -317,7 +319,7 @@ impl SpacePacket {
     /// The packet type denotes whether a packet is a telecommand (request) or telemetry (report)
     /// packet. Note that the exact definition of telecommand and telemetry may differ per system,
     /// and indeed the "correct" value here may differ per project.
-    pub fn packet_type(&self) -> PacketType {
+    pub const fn packet_type(&self) -> PacketType {
         self.primary_header.packet_type()
     }
 
@@ -329,7 +331,7 @@ impl SpacePacket {
     /// Denotes whether the packet contains a secondary header. If no user field is present, the
     /// secondary header is mandatory (presumably, to ensure that some data is always transferred,
     /// considering the Space Packet header itself contains no meaningful data).
-    pub fn secondary_header_flag(&self) -> SecondaryHeaderFlag {
+    pub const fn secondary_header_flag(&self) -> SecondaryHeaderFlag {
         self.primary_header.secondary_header_flag()
     }
 
@@ -343,7 +345,7 @@ impl SpacePacket {
     /// field may differ per implementation: technically, it only represents "some" data path.
     /// In practice, it will often be a identifier for a data channel, the packet source, or the
     /// packet destination.
-    pub fn apid(&self) -> Apid {
+    pub const fn apid(&self) -> Apid {
         self.primary_header.apid()
     }
 
@@ -354,7 +356,7 @@ impl SpacePacket {
 
     /// Sequence flags may be used to indicate that the data contained in a packet is only part of
     /// a larger set of application data.
-    pub fn sequence_flag(&self) -> SequenceFlag {
+    pub const fn sequence_flag(&self) -> SequenceFlag {
         self.primary_header.sequence_flag()
     }
 
@@ -367,7 +369,7 @@ impl SpacePacket {
     /// each Space Packet (generated per APID). For telecommands (i.e., with packet type 1) this
     /// may also be a "packet name" that identifies the telecommand packet within its
     /// communications session.
-    pub fn packet_sequence_count(&self) -> PacketSequenceCount {
+    pub const fn packet_sequence_count(&self) -> PacketSequenceCount {
         self.primary_header.packet_sequence_count()
     }
 
@@ -382,7 +384,7 @@ impl SpacePacket {
     /// The packet data length field represents the length of the associated packet data field.
     /// However, it is not stored directly: rather, the "length count" is stored, which is the
     /// packet data length minus one.
-    pub fn packet_data_length(&self) -> usize {
+    pub const fn packet_data_length(&self) -> usize {
         self.primary_header.packet_data_length()
     }
 
@@ -414,17 +416,17 @@ impl SpacePacket {
 
     /// Returns the total length of the packet in bytes. Note the distinction from the packet data
     /// length, which refers only to the length of the data field of the packet.
-    pub fn packet_length(&self) -> usize {
-        self.as_bytes().len()
+    pub const fn packet_length(&self) -> usize {
+        self.data_field.len() + core::mem::size_of::<SpacePacketPrimaryHeader>()
     }
 
     /// Returns a reference to the packet data field contained in this Space Packet.
-    pub fn packet_data_field(&self) -> &[u8] {
+    pub const fn packet_data_field(&self) -> &[u8] {
         &self.data_field
     }
 
     /// Returns a mutable reference to the packet data field contained in this Space Packet.
-    pub fn packet_data_field_mut(&mut self) -> &mut [u8] {
+    pub const fn packet_data_field_mut(&mut self) -> &mut [u8] {
         &mut self.data_field
     }
 }
@@ -451,7 +453,7 @@ impl core::fmt::Debug for SpacePacket {
 /// including the primary header directly in derived packets.
 #[repr(C)]
 #[derive(
-    Copy, Clone, Debug, ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Hash,
+    Copy, Clone, Debug, ByteEq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, ByteHash,
 )]
 pub struct SpacePacketPrimaryHeader {
     packet_identification: network_endian::U16,
@@ -490,9 +492,8 @@ impl SpacePacketPrimaryHeader {
 
     /// Since the Space Packet protocol may technically support alternative packet structures in
     /// future versions, the 3-bit packet version field may not actually contain a "correct" value.
-    pub fn packet_version(&self) -> PacketVersionNumber {
-        use core::ops::Shr;
-        PacketVersionNumber(self.packet_identification.as_bytes()[0].shr(5))
+    pub const fn packet_version(&self) -> PacketVersionNumber {
+        PacketVersionNumber(self.packet_identification.to_bytes()[0] >> 5)
     }
 
     /// Initializes the packet version to the proper value. Must be a fixed value, so this function
@@ -506,8 +507,8 @@ impl SpacePacketPrimaryHeader {
     /// The packet type denotes whether a packet is a telecommand (request) or telemetry (report)
     /// packet. Note that the exact definition of telecommand and telemetry may differ per system,
     /// and indeed the "correct" value here may differ per project.
-    pub fn packet_type(&self) -> PacketType {
-        match (self.packet_identification.as_bytes()[0] & 0x10) == 0x10 {
+    pub const fn packet_type(&self) -> PacketType {
+        match (self.packet_identification.to_bytes()[0] & 0x10) == 0x10 {
             true => PacketType::Telecommand,
             false => PacketType::Telemetry,
         }
@@ -522,8 +523,8 @@ impl SpacePacketPrimaryHeader {
     /// Denotes whether the packet contains a secondary header. If no user field is present, the
     /// secondary header is mandatory (presumably, to ensure that some data is always transferred,
     /// considering the Space Packet header itself contains no meaningful data).
-    pub fn secondary_header_flag(&self) -> SecondaryHeaderFlag {
-        match (self.packet_identification.as_bytes()[0] & 0x08) == 0x08 {
+    pub const fn secondary_header_flag(&self) -> SecondaryHeaderFlag {
+        match (self.packet_identification.to_bytes()[0] & 0x08) == 0x08 {
             true => SecondaryHeaderFlag::Present,
             false => SecondaryHeaderFlag::Absent,
         }
@@ -539,7 +540,7 @@ impl SpacePacketPrimaryHeader {
     /// field may differ per implementation: technically, it only represents "some" data path.
     /// In practice, it will often be a identifier for a data channel, the packet source, or the
     /// packet destination.
-    pub fn apid(&self) -> Apid {
+    pub const fn apid(&self) -> Apid {
         Apid(self.packet_identification.get() & 0b0000_0111_1111_1111)
     }
 
@@ -553,14 +554,13 @@ impl SpacePacketPrimaryHeader {
 
     /// Sequence flags may be used to indicate that the data contained in a packet is only part of
     /// a larger set of application data.
-    pub fn sequence_flag(&self) -> SequenceFlag {
-        use core::ops::Shr;
-        match self.packet_sequence_control.as_bytes()[0].shr(6i32) {
+    pub const fn sequence_flag(&self) -> SequenceFlag {
+        match self.packet_sequence_control.to_bytes()[0] >> 6i32 {
             0b00 => SequenceFlag::Continuation,
             0b01 => SequenceFlag::First,
             0b10 => SequenceFlag::Last,
             0b11 => SequenceFlag::Unsegmented,
-            _ => unreachable!("Internal error: Reached unreachable code segment"),
+            _ => unreachable!(), // Internal error: Reached unreachable code segment
         }
     }
 
@@ -574,7 +574,7 @@ impl SpacePacketPrimaryHeader {
     /// each Space Packet (generated per APID). For telecommands (i.e., with packet type 1) this
     /// may also be a "packet name" that identifies the telecommand packet within its
     /// communications session.
-    pub fn packet_sequence_count(&self) -> PacketSequenceCount {
+    pub const fn packet_sequence_count(&self) -> PacketSequenceCount {
         PacketSequenceCount(self.packet_sequence_control.get() & 0b0011_1111_1111_1111)
     }
 
@@ -591,7 +591,7 @@ impl SpacePacketPrimaryHeader {
     /// The packet data length field represents the length of the associated packet data field.
     /// However, it is not stored directly: rather, the "length count" is stored, which is the
     /// packet data length minus one.
-    pub fn packet_data_length(&self) -> usize {
+    pub const fn packet_data_length(&self) -> usize {
         self.data_length.get() as usize + 1
     }
 
@@ -703,12 +703,12 @@ impl PacketVersionNumber {
     /// The Space Packet protocol version presently implemented in this crate is based on issue 2
     /// of the CCSDS SPP blue book, which encompasses only the Version 1 CCSDS Packet, indicated by
     /// a version number of 0. Other packet structures may be added in the future.
-    pub fn is_supported(&self) -> bool {
+    pub const fn is_supported(&self) -> bool {
         matches!(self.0, 0b0000_0000u8)
     }
 
     /// Returns the packet version number corresponding with the Version 1 CCSDS Packet.
-    pub fn version1_ccsds_packet() -> Self {
+    pub const fn version1_ccsds_packet() -> Self {
         Self(0)
     }
 }
@@ -747,7 +747,7 @@ pub struct Apid(u16);
 impl Apid {
     const MAX: u16 = 0b0000_0111_1111_1111u16;
 
-    pub fn new(id: u16) -> Self {
+    pub const fn new(id: u16) -> Self {
         assert!(
             id <= Self::MAX,
             "APIDs may not exceed 2047 (due to maximum of 13 bits in representation)"
@@ -767,12 +767,12 @@ impl Apid {
 
     /// A special APID value (0x7ff) is reserved for idle Space Packets, i.e., packets that do not
     /// carry any actual data.
-    pub fn is_idle(&self) -> bool {
+    pub const fn is_idle(&self) -> bool {
         self.0 == 0x7ff
     }
 
     /// Returns the APID as a regular 16-bit unsigned integer.
-    pub fn as_u16(&self) -> u16 {
+    pub const fn as_u16(&self) -> u16 {
         self.0
     }
 }
@@ -808,7 +808,7 @@ impl PacketSequenceCount {
     const MAX: u16 = 0b0011_1111_1111_1111u16;
 
     /// The packet sequence count is initialized to zero by default.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self(0)
     }
 
@@ -826,7 +826,7 @@ impl PacketSequenceCount {
     /// A good default behaviour is for the packet sequence count to increment by one every time
     /// a new packet is sent. This method permits a simple wrapping increment to be performed, to
     /// make this easier.
-    pub fn increment(&mut self) {
+    pub const fn increment(&mut self) {
         self.0 += 1;
         if self.0 > Self::MAX {
             self.0 = 0;
