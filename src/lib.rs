@@ -177,92 +177,7 @@ impl SpacePacket {
     /// presently implemented, that is always 6 bytes.
     #[must_use]
     pub const fn primary_header_size() -> usize {
-        6
-    }
-
-    /// Since the Space Packet protocol may technically support alternative packet structures in
-    /// future versions, the 3-bit packet version field may not actually contain a "correct" value.
-    #[must_use]
-    pub const fn packet_version(&self) -> PacketVersionNumber {
-        self.primary_header.packet_version()
-    }
-
-    /// The packet type denotes whether a packet is a telecommand (request) or telemetry (report)
-    /// packet. Note that the exact definition of telecommand and telemetry may differ per system,
-    /// and indeed the "correct" value here may differ per project.
-    #[must_use]
-    pub const fn packet_type(&self) -> PacketType {
-        self.primary_header.packet_type()
-    }
-
-    /// Sets the packet type to the given value.
-    pub fn set_packet_type(&mut self, packet_type: PacketType) {
-        self.primary_header.set_packet_type(packet_type);
-    }
-
-    /// Denotes whether the packet contains a secondary header. If no user field is present, the
-    /// secondary header is mandatory (presumably, to ensure that some data is always transferred,
-    /// considering the Space Packet header itself contains no meaningful data).
-    #[must_use]
-    pub const fn secondary_header_flag(&self) -> SecondaryHeaderFlag {
-        self.primary_header.secondary_header_flag()
-    }
-
-    /// Updates the value of the secondary header flag with the provided value.
-    pub fn set_secondary_header_flag(&mut self, secondary_header_flag: SecondaryHeaderFlag) {
-        self.primary_header
-            .set_secondary_header_flag(secondary_header_flag);
-    }
-
-    /// Returns the application process ID stored in the packet. The actual meaning of this APID
-    /// field may differ per implementation: technically, it only represents "some" data path.
-    /// In practice, it will often be a identifier for a data channel, the packet source, or the
-    /// packet destination.
-    #[must_use]
-    pub const fn apid(&self) -> Apid {
-        self.primary_header.apid()
-    }
-
-    /// Sets the APID used to route the packet to the given value.
-    pub fn set_apid(&mut self, apid: Apid) {
-        self.primary_header.set_apid(apid);
-    }
-
-    /// Sequence flags may be used to indicate that the data contained in a packet is only part of
-    /// a larger set of application data.
-    #[must_use]
-    pub const fn sequence_flag(&self) -> SequenceFlag {
-        self.primary_header.sequence_flag()
-    }
-
-    /// Sets the sequence flag to the provided value.
-    pub fn set_sequence_flag(&mut self, sequence_flag: SequenceFlag) {
-        self.primary_header.set_sequence_flag(sequence_flag);
-    }
-
-    /// The packet sequence count is unique per APID and denotes the sequential binary count of
-    /// each Space Packet (generated per APID). For telecommands (i.e., with packet type 1) this
-    /// may also be a "packet name" that identifies the telecommand packet within its
-    /// communications session.
-    #[must_use]
-    pub const fn packet_sequence_count(&self) -> PacketSequenceCount {
-        self.primary_header.packet_sequence_count()
-    }
-
-    /// Sets the packet sequence count to the provided value. This value must be provided by an
-    /// external counter and is not provided at a Space Packet type level because it might differ
-    /// between packet streams.
-    pub fn set_packet_sequence_count(&mut self, sequence_count: PacketSequenceCount) {
-        self.primary_header
-            .set_packet_sequence_count(sequence_count);
-    }
-
-    /// The packet data length field represents the length of the associated packet data field.
-    /// However, it is not stored directly: rather, the "length count" is stored, which is the
-    /// packet data length minus one.
-    #[must_use]
-    pub const fn packet_data_length(&self) -> usize {
-        self.primary_header.packet_data_length()
+        core::mem::size_of::<SpacePacketPrimaryHeader>()
     }
 
     /// Sets the packet data length field to the provided value. Note that the given value is not
@@ -330,6 +245,20 @@ impl core::fmt::Debug for SpacePacket {
             .field("primary_header", &self.primary_header)
             .field("data_field", &&self.data_field)
             .finish()
+    }
+}
+
+impl core::ops::Deref for SpacePacket {
+    type Target = SpacePacketPrimaryHeader;
+
+    fn deref(&self) -> &Self::Target {
+        &self.primary_header
+    }
+}
+
+impl core::ops::DerefMut for SpacePacket {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.primary_header
     }
 }
 
