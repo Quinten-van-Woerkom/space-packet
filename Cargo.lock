@@ -37,7 +37,7 @@ checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 
 [[package]]
 name = "space-packet"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "rand",
  "thiserror",
