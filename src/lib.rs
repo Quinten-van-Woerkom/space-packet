@@ -829,7 +829,7 @@ fn serialize_trivial_packet() {
 /// cases, such as when the buffer is too small or when the requested data field size is 0.
 #[test]
 fn roundtrip() {
-    use rand::{RngCore, SeedableRng};
+    use rand::{Rng, SeedableRng};
     // Note that we always use the same seed for reproducibility.
     let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
     let mut buffer = [0u8; 16000];
@@ -976,7 +976,7 @@ fn buffer_too_small_for_header_construction() {
 /// this.
 #[test]
 fn buffer_too_small_for_parsed_packet() {
-    use rand::{RngCore, SeedableRng};
+    use rand::{Rng, SeedableRng};
     // Note that we always use the same seed for reproducibility.
     let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
     let mut buffer = [0u8; 256];
