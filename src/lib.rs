@@ -376,6 +376,12 @@ impl SpacePacketPrimaryHeader {
         self.packet_identification.as_mut_bytes()[1] = apid[1];
     }
 
+    /// Returns whether this space packet is an idle packet. This is the case when the contained APID is all ones.
+    #[must_use]
+    pub const fn is_idle(&self) -> bool {
+        self.apid().is_idle()
+    }
+
     /// Sequence flags may be used to indicate that the data contained in a packet is only part of
     /// a larger set of application data.
     #[must_use]
