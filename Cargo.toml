@@ -1,7 +1,7 @@
 [package]
 name = "space-packet"
 description = "Rust implementation of the CCSDS Space Packet Protocol"
-version = "2.2.1"
+version = "2.3.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -16,7 +16,7 @@ std = []
 rand = { version = "0.10.1" }
 
 [dependencies]
-thiserror = "2.0.18"
+thiserror = { version = "2.0.18", default-features = false }
 zerocopy = { version = "0.8.52", features = ["derive"] }
 
 [lints.rust]
