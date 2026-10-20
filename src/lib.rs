@@ -279,6 +279,27 @@ pub struct SpacePacketPrimaryHeader {
 }
 
 impl SpacePacketPrimaryHeader {
+    /// Attempts to parse only a Space Packet primary header from the start of a given byte slice.
+    /// Any bytes following the first six are ignored: in particular, it is not checked whether the
+    /// slice actually contains the full packet described by the header. This makes it possible to
+    /// inspect the header of a partial packet, for example to report on why it was rejected.
+    ///
+    /// This deserialization is fully zero-copy. The `&SpacePacketPrimaryHeader` returned on
+    /// success directly references the first six bytes of the input slice `bytes`.
+    ///
+    /// # Errors
+    /// Shall return an error if the provided bytes are too few to contain a primary header, or if
+    /// the primary header is not semantically valid.
+    pub fn parse(bytes: &[u8]) -> Result<&Self, InvalidSpacePacket> {
+        let Ok((primary_header, _)) = Self::ref_from_prefix(bytes) else {
+            return Err(InvalidSpacePacket::SliceTooSmallForSpacePacketHeader {
+                length: bytes.len(),
+            });
+        };
+        primary_header.validate()?;
+        Ok(primary_header)
+    }
+
     /// Validates that the Space Packet primary header is valid, in that its fields are coherent.
     /// In particular, it is verified that the version number is that of a supported Space Packet.
     ///
@@ -524,6 +545,19 @@ impl PacketVersionNumber {
     pub const fn version1_ccsds_packet() -> Self {
         Self(0)
     }
+
+    /// Returns the packet version number as a regular 8-bit unsigned integer. Only the lower three
+    /// bits may be set.
+    #[must_use]
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+}
+
+impl From<PacketVersionNumber> for u8 {
+    fn from(value: PacketVersionNumber) -> Self {
+        value.0
+    }
 }
 
 /// Space packet type
@@ -661,6 +695,49 @@ impl PacketSequenceCount {
             self.0 = 0;
         }
     }
+
+    /// Constructs a packet sequence count from the given value, if it fits in the 14 bits
+    /// available in its representation.
+    ///
+    /// # Errors
+    /// Shall return an error if the provided value exceeds `0x3fff`.
+    pub const fn try_new(count: u16) -> Result<Self, InvalidPacketSequenceCount> {
+        if count > Self::MAX {
+            return Err(InvalidPacketSequenceCount { value: count });
+        }
+        Ok(Self(count))
+    }
+
+    /// Returns the packet sequence count as a regular 16-bit unsigned integer. Only the lower 14
+    /// bits may be set.
+    #[must_use]
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+}
+
+impl From<PacketSequenceCount> for u16 {
+    fn from(value: PacketSequenceCount) -> Self {
+        value.0
+    }
+}
+
+impl TryFrom<u16> for PacketSequenceCount {
+    type Error = InvalidPacketSequenceCount;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        Self::try_new(value)
+    }
+}
+
+/// Invalid packet sequence count
+///
+/// Returned when attempting to construct a packet sequence count from a value that does not fit in
+/// its 14-bit representation.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Error)]
+#[error("packet sequence count {value} exceeds maximum of 16383 (14 bits)")]
+pub struct InvalidPacketSequenceCount {
+    pub value: u16,
 }
 
 /// Test harness for formal verification.
@@ -1017,4 +1094,71 @@ fn buffer_too_small_for_parsed_packet() {
             })
         );
     }
+}
+
+/// Packet sequence counts shall be constructible from and convertible to raw integers, with
+/// values outside the 14-bit range being rejected.
+#[test]
+fn packet_sequence_count_conversion() {
+    assert_eq!(PacketSequenceCount::try_from(0).unwrap().as_u16(), 0);
+    assert_eq!(
+        u16::from(PacketSequenceCount::try_from(0x3fff).unwrap()),
+        0x3fff
+    );
+    assert_eq!(
+        PacketSequenceCount::try_from(0x4000),
+        Err(InvalidPacketSequenceCount { value: 0x4000 })
+    );
+    assert_eq!(
+        PacketSequenceCount::try_new(u16::MAX),
+        Err(InvalidPacketSequenceCount { value: u16::MAX })
+    );
+}
+
+/// The packet version number shall be readable as a raw integer.
+#[test]
+fn packet_version_number_conversion() {
+    assert_eq!(PacketVersionNumber::version1_ccsds_packet().as_u8(), 0);
+    assert_eq!(u8::from(PacketVersionNumber(0b101)), 0b101);
+}
+
+/// The primary header shall be parseable from a partial packet, so that its fields may still be
+/// inspected even though the packet as a whole is rejected.
+#[test]
+fn primary_header_from_partial_packet() {
+    let bytes = &[
+        0b0001_1000u8, // Packet version 0, telecommand packet, secondary header present
+        0b0010_1010u8, // APID 42
+        0b1100_0001u8, // Unsegmented packet
+        0b0010_0011u8, // Packet sequence count 0x123
+        0b0000_0000u8,
+        7u8, // Packet data length 8
+        0b0000_0000u8,
+    ];
+    assert!(matches!(
+        SpacePacket::parse(bytes),
+        Err(InvalidSpacePacket::PartialPacket { .. })
+    ));
+
+    let header = SpacePacketPrimaryHeader::parse(bytes).unwrap();
+    assert_eq!(header.packet_version().as_u8(), 0);
+    assert_eq!(header.packet_type(), PacketType::Telecommand);
+    assert_eq!(header.apid(), Apid::new(42));
+    assert_eq!(header.packet_sequence_count().as_u16(), 0x123);
+    assert_eq!(header.packet_data_length(), 8);
+
+    // Exactly six bytes suffices, but fewer do not.
+    assert!(SpacePacketPrimaryHeader::parse(&bytes[..6]).is_ok());
+    assert_eq!(
+        SpacePacketPrimaryHeader::parse(&bytes[..5]).unwrap_err(),
+        InvalidSpacePacket::SliceTooSmallForSpacePacketHeader { length: 5 }
+    );
+
+    // Semantic header checks still apply.
+    let mut unsupported = *bytes;
+    unsupported[0] |= 0b0010_0000;
+    assert!(matches!(
+        SpacePacketPrimaryHeader::parse(&unsupported),
+        Err(InvalidSpacePacket::UnsupportedPacketVersion { .. })
+    ));
 }
