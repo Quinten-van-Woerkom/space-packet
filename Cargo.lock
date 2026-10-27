@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "space-packet"
-version = "2.3.2"
+version = "3.0.0"
 dependencies = [
  "rand",
  "ref-cast",
