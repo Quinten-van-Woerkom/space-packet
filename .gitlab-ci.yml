@@ -5,9 +5,12 @@ variables:
   CARGO_TERM_COLOR: always
 
 cache:
-  key: $CI_JOB_NAME
+  key: $CI_JOB_NAME-v2
   paths:
     - .cargo/bin/
+    # Install metadata, without which `cargo install` refuses to overwrite cached binaries.
+    - .cargo/.crates.toml
+    - .cargo/.crates2.json
     - .cargo/registry/index/
     - .cargo/registry/cache/
     - target/
