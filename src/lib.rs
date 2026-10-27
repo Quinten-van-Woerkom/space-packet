@@ -1039,8 +1039,13 @@ mod kani_harness {
             assert_eq!(packet.sequence_flag(), sequence_flag);
             assert_eq!(packet.packet_sequence_count(), sequence_count);
 
-            let parsed = SpacePacket::parse(packet.as_bytes());
-            assert_eq!(parsed, Ok(&*packet));
+            // Parsing is zero-copy, so the parsed packet must span exactly the same memory as the
+            // constructed one. Comparing addresses rather than contents keeps the proof tractable:
+            // a byte-wise comparison of a symbolic-length slice requires unwinding `memcmp`.
+            let Ok(parsed) = SpacePacket::parse(packet.as_bytes()) else {
+                panic!("constructed packet does not parse")
+            };
+            assert!(core::ptr::eq(parsed.as_bytes(), packet.as_bytes()));
         }
     }
 }
