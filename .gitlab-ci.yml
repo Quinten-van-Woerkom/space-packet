@@ -1,0 +1,59 @@
+image: rust:latest
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  CARGO_TERM_COLOR: always
+
+cache:
+  key: $CI_JOB_NAME
+  paths:
+    - .cargo/bin/
+    - .cargo/registry/index/
+    - .cargo/registry/cache/
+    - target/
+
+stages:
+  - lint
+  - test
+  - verify
+
+fmt:
+  stage: lint
+  before_script:
+    - rustup component add rustfmt
+  script:
+    - cargo fmt --check
+
+clippy:
+  stage: lint
+  # Currently fails on a lint triggered by `zerocopy` derives; non-blocking until resolved.
+  allow_failure: true
+  before_script:
+    - rustup component add clippy
+  script:
+    - cargo clippy --all-targets --all-features -- -D warnings
+
+deny:
+  stage: lint
+  before_script:
+    - cargo install --locked cargo-deny
+  script:
+    - cargo deny check
+
+test:
+  stage: test
+  script:
+    - cargo test --all-features
+
+test-no-std:
+  stage: test
+  script:
+    - cargo test --no-default-features
+
+kani:
+  stage: verify
+  before_script:
+    - cargo install --locked kani-verifier
+    - cargo kani setup
+  script:
+    - cargo kani
