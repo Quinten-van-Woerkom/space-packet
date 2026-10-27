@@ -89,7 +89,42 @@ let bytes = &[
     0b0000_0000u8,
     0b0000_0000u8,
 ];
-// Returns an error indicating that the given byte slice contains only a partial packet.
+// Returns an error indicating that idle packets may not contain a secondary header.
 let result = SpacePacket::parse(bytes);
 assert_eq!(result, Err(InvalidSpacePacket::IdlePacketWithSecondaryHeader));
+
+// Requesting such a packet during construction is rejected in the same manner.
+let buffer = &mut [0u8; 8];
+let result = SpacePacket::construct(
+    buffer,
+    PacketType::Telemetry,
+    SecondaryHeaderFlag::Present,
+    Apid::IDLE,
+    SequenceFlag::Unsegmented,
+    PacketSequenceCount::new(),
+);
+assert_eq!(result, Err(InvalidPacketConstruction::IdlePacketWithSecondaryHeader));
+```
+
+The only ways to obtain a `SpacePacket` are through these validating constructors, and a `SpacePacket` may only be modified in ways that keep it valid. In particular, its packet data field is always exactly as long as its packet data length field states.
+
+## Packet streams
+Packets that are stored back-to-back may be parsed one at a time using `SpacePacket::parse_prefix`, which also returns the bytes following the packet, or iterated over using `SpacePackets`:
+```rust
+use space_packet::*;
+let bytes = &[
+    0b0000_0000u8, 0b0000_0001u8, 0b1100_0000u8, 0b0000_0000u8, 0b0000_0000u8, 0b0000_0000u8,
+    0xaau8,        // First packet, APID 1, one-byte data field
+    0b0000_0000u8, 0b0000_0010u8, 0b1100_0000u8, 0b0000_0000u8, 0b0000_0000u8, 0b0000_0001u8,
+    0xbbu8, 0xccu8, // Second packet, APID 2, two-byte data field
+    0b0000_0000u8, 0b0000_0011u8, // Start of a third packet, not yet fully received
+];
+let mut packets = SpacePackets::new(bytes);
+assert_eq!(packets.next().unwrap().unwrap().apid(), Apid::new(1));
+assert_eq!(packets.next().unwrap().unwrap().packet_data_field(), &[0xbb, 0xcc]);
+// The partial packet results in an error, after which iteration stops. Its bytes remain
+// available, for example to be completed once the rest of the packet has been received.
+assert!(packets.next().unwrap().is_err());
+assert!(packets.next().is_none());
+assert_eq!(packets.remainder(), &[0b0000_0000u8, 0b0000_0011u8]);
 ```
