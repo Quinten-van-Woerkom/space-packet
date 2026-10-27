@@ -26,8 +26,6 @@ fmt:
 
 clippy:
   stage: lint
-  # Currently fails on a lint triggered by `zerocopy` derives; non-blocking until resolved.
-  allow_failure: true
   before_script:
     - rustup component add clippy
   script:
@@ -45,10 +43,18 @@ test:
   script:
     - cargo test --all-features
 
-test-no-std:
+build-no-std:
   stage: test
+  before_script:
+    - rustup target add thumbv7em-none-eabihf
   script:
-    - cargo test --no-default-features
+    - cargo build --target thumbv7em-none-eabihf
+
+msrv:
+  stage: test
+  image: rust:1.85
+  script:
+    - cargo check
 
 kani:
   stage: verify
