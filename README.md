@@ -3,6 +3,8 @@ Simple and generic Rust implementation of the Consultative Committee for Space D
 Written to be fully `no_std` and without `unsafe` blocks: this makes it suitable for usage in high-assurance embedded environments.
 The Kani model checker is used to formally prove the absence of certain classes of errors: parsing of byte sequences and creation of Space Packets shall succeed for all possible inputs without panicking. Violation of preconditions shall be handled gracefully by returning an error.
 
+Each requirement of CCSDS 133.0-B-2 is traced to the tests and proofs that verify it, or to the reason it is out of scope for this crate, in `TRACEABILITY.md`. The same matrix is included in the API documentation, as the `traceability` module.
+
 ## Usage
 Reading Space Packets from some given byte buffer may be done as follows:
 ```rust

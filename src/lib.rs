@@ -15,6 +15,9 @@
 //! functionality needed to handle Space Packets is found in the actual `SpacePacket`
 //! implementation. This functionality is included in the hope that it helps write simple and
 //! robust SPP implementations.
+//!
+//! The [`traceability`] module traces each requirement of CCSDS 133.0-B-2 to the tests and formal
+//! proofs that verify it.
 
 use core::iter::FusedIterator;
 
@@ -24,6 +27,11 @@ use zerocopy::byteorder::network_endian;
 use zerocopy::{
     ByteEq, ByteHash, FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, Unaligned,
 };
+
+// Documentation-only module: `TRACEABILITY.md` remains the single source of the matrix, so that
+// it is also readable outside of the generated documentation.
+#[doc = include_str!("../TRACEABILITY.md")]
+pub mod traceability {}
 
 /// Unvalidated memory layout of a Space Packet: the primary header, directly followed by the
 /// packet data field. This type implements `FromBytes`, so any byte slice of at least six bytes
@@ -890,6 +898,8 @@ mod kani_harness {
     /// its header. Note that only the header bytes are symbolic. This is needed to restrict the
     /// search space for kani, and is a valid assumption because the parsing implementation never
     /// touches the packet data field contents.
+    ///
+    /// Requirements: 3.2.2.1, 4.1.2.1, 4.1.2.2, 4.1.3.5.3, 4.1.4.1.2
     #[kani::proof]
     fn packet_parsing() {
         let mut bytes = [0u8; MAX_PACKET_LENGTH + 1];
@@ -908,6 +918,7 @@ mod kani_harness {
                 );
                 assert_eq!(packet.packet_length() + remainder.len(), length);
                 assert!(packet.validate().is_ok());
+                assert!((7..=MAX_PACKET_LENGTH).contains(&packet.packet_length()));
             }
             Err(InvalidSpacePacket::SliceTooSmallForSpacePacketHeader { length: reported }) => {
                 assert!(length < 6);
@@ -926,6 +937,8 @@ mod kani_harness {
 
     /// This test verifies that header parsing accepts exactly those headers that are of a
     /// supported version and are not idle packets with a secondary header.
+    ///
+    /// Requirements: 4.1.3.2.2, 4.1.3.3.3.4, 4.1.3.3.4.4
     #[kani::proof]
     fn header_parsing() {
         let bytes: [u8; 6] = kani::any();
@@ -939,6 +952,8 @@ mod kani_harness {
 
     /// This test verifies that each primary header setter changes only its own field, for any
     /// initial header contents.
+    ///
+    /// Requirements: 4.1.3.1, 4.1.3.3.1.2, 4.1.3.4.1.2
     #[kani::proof]
     fn header_setters_are_independent() {
         let mut header = SpacePacketPrimaryHeader::read_from_bytes(&kani::any::<[u8; 6]>())
@@ -1000,6 +1015,8 @@ mod kani_harness {
     /// The buffer size is rather arbitrarily chosen to be 1024. This covers a significant amount
     /// of valid packet sizes, but also ensures that the "error path" is covered, where the
     /// requested packet is larger than the available buffer.
+    ///
+    /// Requirements: 3.2.2.1, 4.1.2.2, 4.1.3.3.3.4, 4.1.4.1.2
     #[kani::proof]
     fn packet_construction() {
         let mut bytes = [kani::any(); 1024];
@@ -1048,6 +1065,87 @@ mod kani_harness {
             assert!(core::ptr::eq(parsed.as_bytes(), packet.as_bytes()));
         }
     }
+
+    /// This test verifies that, for any field values and any initial header contents, setting all
+    /// primary header fields results in exactly the bit layout of figure 4-2 of CCSDS 133.0-B-2,
+    /// with the most significant bit of each field first. The expected bytes are computed
+    /// independently of the implementation.
+    ///
+    /// Requirements: 1.6.3, 4.1.3.2.1, 4.1.3.2.2, 4.1.3.3.1.1, 4.1.3.3.2.1, 4.1.3.3.2.3, 4.1.3.3.3.1, 4.1.3.3.3.2, 4.1.3.3.4.1, 4.1.3.4.1.1, 4.1.3.4.2.1, 4.1.3.4.2.2, 4.1.3.4.3.1, 4.1.3.5.1, 4.1.3.5.2, 4.1.3.5.3
+    #[kani::proof]
+    fn header_encoding() {
+        let mut header = SpacePacketPrimaryHeader::read_from_bytes(&kani::any::<[u8; 6]>())
+            .unwrap_or_else(|_| unreachable!());
+        let packet_type: PacketType = kani::any();
+        let secondary_header_flag: SecondaryHeaderFlag = kani::any();
+        let apid = Apid::any_apid();
+        let sequence_flag: SequenceFlag = kani::any();
+        let sequence_count = PacketSequenceCount::any_packet_sequence_count();
+        let packet_data_length: usize = kani::any();
+        kani::assume((1..=u16::MAX as usize + 1).contains(&packet_data_length));
+
+        header.initialize_packet_version();
+        header.set_packet_type(packet_type);
+        header.set_secondary_header_flag(secondary_header_flag);
+        header.set_apid(apid);
+        header.set_sequence_flag(sequence_flag);
+        header.set_packet_sequence_count(sequence_count);
+        header
+            .set_packet_data_length(packet_data_length)
+            .unwrap_or_else(|_| unreachable!());
+
+        let apid = apid.as_u16();
+        let count = sequence_count.as_u16();
+        let length_count = (packet_data_length - 1) as u16;
+        let expected = [
+            ((packet_type as u8) << 4) | ((secondary_header_flag as u8) << 3) | (apid >> 8) as u8,
+            apid as u8,
+            ((sequence_flag as u8) << 6) | (count >> 8) as u8,
+            count as u8,
+            (length_count >> 8) as u8,
+            length_count as u8,
+        ];
+        assert_eq!(header.as_bytes(), &expected);
+    }
+
+    /// This test verifies that, for any six header bytes, each primary header field is read from
+    /// exactly the bits that figure 4-2 of CCSDS 133.0-B-2 assigns to it.
+    ///
+    /// Requirements: 1.6.3, 4.1.3.2.1, 4.1.3.3.1.1, 4.1.3.3.2.1, 4.1.3.3.2.3, 4.1.3.3.3.1, 4.1.3.3.3.2, 4.1.3.3.4.1, 4.1.3.4.1.1, 4.1.3.4.2.1, 4.1.3.4.2.2, 4.1.3.4.3.1, 4.1.3.5.1, 4.1.3.5.3
+    #[kani::proof]
+    fn header_decoding() {
+        let bytes: [u8; 6] = kani::any();
+        let header =
+            SpacePacketPrimaryHeader::read_from_bytes(&bytes).unwrap_or_else(|_| unreachable!());
+
+        assert_eq!(header.packet_version().as_u8(), bytes[0] >> 5);
+        assert_eq!(header.packet_type() as u8, (bytes[0] >> 4) & 1);
+        assert_eq!(header.secondary_header_flag() as u8, (bytes[0] >> 3) & 1);
+        assert_eq!(
+            header.apid().as_u16(),
+            u16::from_be_bytes([bytes[0] & 0b0000_0111, bytes[1]])
+        );
+        assert_eq!(header.sequence_flag() as u8, bytes[2] >> 6);
+        assert_eq!(
+            header.packet_sequence_count().as_u16(),
+            u16::from_be_bytes([bytes[2] & 0b0011_1111, bytes[3]])
+        );
+        assert_eq!(
+            header.packet_data_length(),
+            usize::from(u16::from_be_bytes([bytes[4], bytes[5]])) + 1
+        );
+    }
+
+    /// This test verifies that incrementing any packet sequence count is continuous modulo 16384.
+    ///
+    /// Requirements: 4.1.3.4.3.4
+    #[kani::proof]
+    fn sequence_count_increment() {
+        let mut count = PacketSequenceCount::any_packet_sequence_count();
+        let before = count.as_u16();
+        count.increment();
+        assert_eq!(count.as_u16(), (before + 1) % 16384);
+    }
 }
 
 #[cfg(test)]
@@ -1076,6 +1174,8 @@ mod tests {
 
     /// Deserialization of a relatively trivial packet. Used to verify that all basic
     /// deserialization logic is correct.
+    ///
+    /// Requirements: 4.1.2.1, 4.1.3.5.3
     #[test]
     fn deserialize_trivial_packet() {
         let bytes = &[
@@ -1106,6 +1206,8 @@ mod tests {
 
     /// Serialization of a relatively trivial packet. Used to verify that all serialization logic
     /// is correct.
+    ///
+    /// Requirements: 4.1.2.1, 4.1.3.2.2
     #[test]
     fn serialize_trivial_packet() {
         let mut bytes = [0u8; 7];
@@ -1145,6 +1247,8 @@ mod tests {
     /// Since this test only considers valid inputs, other unit tests are needed to cover
     /// off-nominal cases, such as when the buffer is too small or when the requested data field
     /// size is 0.
+    ///
+    /// Requirements: 3.2.2.1, 4.1.2.1, 4.1.2.2, 4.1.3.5.3
     #[test]
     fn roundtrip() {
         // Note that we always use the same seed for reproducibility.
@@ -1216,6 +1320,8 @@ mod tests {
 
     /// Empty packet data fields are not permitted by CCSDS 133.0-B-2, so such requests must be
     /// rejected.
+    ///
+    /// Requirements: 3.2.2.1, 4.1.2.1, 4.1.2.2, 4.1.4.1.2
     #[test]
     fn empty_packet_data_field() {
         let mut bytes = [0u8; 6];
@@ -1228,6 +1334,8 @@ mod tests {
     /// When the buffer to construct a Space Packet in is too small to contain a packet primary
     /// header, this shall be caught and an error shall be returned, independent of the actual
     /// packet request.
+    ///
+    /// Requirements: 3.2.2.1, 4.1.2.2
     #[test]
     fn buffer_too_small_for_header_construction() {
         let mut buffer = [0u8; 5];
@@ -1243,6 +1351,8 @@ mod tests {
 
     /// Buffers larger than the largest representable packet shall be rejected, rather than having
     /// their length silently truncated.
+    ///
+    /// Requirements: 3.2.2.1, 4.1.2.1, 4.1.2.2
     #[test]
     fn buffer_too_large_for_construction() {
         let mut buffer = vec![0u8; MAX_PACKET_LENGTH + 1];
@@ -1258,6 +1368,8 @@ mod tests {
 
     /// Idle packets may not contain a secondary header, so construction of such packets must be
     /// rejected, and the buffer must be left untouched.
+    ///
+    /// Requirements: 4.1.3.3.3.4
     #[test]
     fn idle_packet_with_secondary_header_construction() {
         let mut buffer = [0xaau8; 8];
@@ -1278,6 +1390,8 @@ mod tests {
 
     /// The packet setters shall refuse to produce an idle packet with a secondary header, and
     /// leave the packet unchanged when doing so.
+    ///
+    /// Requirements: 4.1.3.3.3.4
     #[test]
     fn setters_preserve_validity() {
         let mut buffer = [0u8; 8];
@@ -1309,6 +1423,8 @@ mod tests {
 
     /// When the buffer to parse a packet from is too small, an error shall be returned to indicate
     /// this.
+    ///
+    /// Requirements: 4.1.3.5.2
     #[test]
     fn buffer_too_small_for_parsed_packet() {
         // Note that we always use the same seed for reproducibility.
@@ -1341,6 +1457,8 @@ mod tests {
 
     /// Parsing a prefix shall return the bytes following the packet, and iteration shall yield
     /// all back-to-back packets, stopping at a trailing partial packet.
+    ///
+    /// Requirements: 4.1.3.5.2
     #[test]
     fn parse_back_to_back_packets() {
         let mut buffer = [0u8; 32];
@@ -1375,18 +1493,132 @@ mod tests {
         assert_eq!(packets.remainder(), &buffer[17..30]);
     }
 
+    /// The primary header shall be laid out exactly as in figure 4-2 of CCSDS 133.0-B-2, with the
+    /// most significant bit of each field transmitted first. This is checked against a
+    /// hand-encoded header in which every field holds a distinct, asymmetric value, and for every
+    /// encoding of the packet type and sequence flags.
+    ///
+    /// Requirements: 1.6.3, 4.1.2.1, 4.1.3.1, 4.1.3.2.1, 4.1.3.2.2, 4.1.3.3.1.1, 4.1.3.3.1.2, 4.1.3.3.2.1, 4.1.3.3.2.2, 4.1.3.3.2.3, 4.1.3.3.3.1, 4.1.3.3.3.2, 4.1.3.3.4.1, 4.1.3.4.1.1, 4.1.3.4.1.2, 4.1.3.4.2.1, 4.1.3.4.2.2, 4.1.3.4.3.1, 4.1.3.5.1, 4.1.3.5.2, 4.1.3.5.3
+    #[test]
+    #[allow(
+        clippy::unusual_byte_groupings,
+        reason = "Bits are grouped per header field"
+    )]
+    fn primary_header_layout() {
+        assert_eq!(SpacePacketPrimaryHeader::primary_header_size(), 6);
+
+        // The buffer is filled with ones, so that any header bit left unwritten is detected.
+        let mut buffer = [0xffu8; 6 + 0x124];
+        let packet = SpacePacket::construct(
+            &mut buffer,
+            PacketType::Telecommand,
+            SecondaryHeaderFlag::Present,
+            Apid::new(0b101_1010_0011),
+            SequenceFlag::First,
+            PacketSequenceCount::try_new(0b10_1011_1100_1101).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(packet.packet_data_length(), 0x124);
+        assert_eq!(
+            buffer[..6],
+            [
+                0b000_1_1_101, // Version '000', telecommand, secondary header, APID MSBs
+                0b1010_0011,   // APID LSBs
+                0b01_101011,   // Sequence flags 'first segment', sequence count MSBs
+                0b1100_1101,   // Sequence count LSBs
+                0x01,          // Packet data length count C = 0x124 - 1 = 0x123
+                0x23,
+            ]
+        );
+        // The packet data field directly follows the primary header, and is not written to.
+        assert!(buffer[6..].iter().all(|byte| *byte == 0xff));
+
+        let packet = SpacePacket::parse(&buffer).unwrap();
+        assert_eq!(packet.packet_version().as_u8(), 0);
+        assert_eq!(packet.packet_type(), PacketType::Telecommand);
+        assert_eq!(packet.secondary_header_flag(), SecondaryHeaderFlag::Present);
+        assert_eq!(packet.apid(), Apid::new(0b101_1010_0011));
+        assert_eq!(packet.sequence_flag(), SequenceFlag::First);
+        assert_eq!(packet.packet_sequence_count().as_u16(), 0b10_1011_1100_1101);
+        assert_eq!(packet.packet_data_length(), 0x124);
+        assert_eq!(packet.packet_data_field().as_ptr(), buffer[6..].as_ptr());
+
+        let sequence_flags = [
+            (SequenceFlag::Continuation, 0b00),
+            (SequenceFlag::First, 0b01),
+            (SequenceFlag::Last, 0b10),
+            (SequenceFlag::Unsegmented, 0b11),
+        ];
+        let packet_types = [(PacketType::Telemetry, 0), (PacketType::Telecommand, 1)];
+        for (sequence_flag, flag_bits) in sequence_flags {
+            for (packet_type, type_bit) in packet_types {
+                let mut buffer = [0u8; 7];
+                let packet = SpacePacket::construct(
+                    &mut buffer,
+                    packet_type,
+                    SecondaryHeaderFlag::Absent,
+                    Apid::new(0),
+                    sequence_flag,
+                    PacketSequenceCount::new(),
+                )
+                .unwrap();
+                assert_eq!(packet.packet_type(), packet_type);
+                assert_eq!(packet.sequence_flag(), sequence_flag);
+                assert_eq!((buffer[0] >> 4) & 1, type_bit);
+                assert_eq!(buffer[2] >> 6, flag_bits);
+            }
+        }
+    }
+
+    /// Packets with a packet version number other than '000' shall be rejected.
+    ///
+    /// Requirements: 4.1.3.2.2
+    #[test]
+    fn unsupported_packet_versions_rejected() {
+        for version in 1u8..8 {
+            let mut bytes = [0u8; 7];
+            bytes[0] = version << 5;
+            assert_eq!(
+                SpacePacket::parse(&bytes).map(|_| ()),
+                Err(InvalidSpacePacket::UnsupportedPacketVersion {
+                    version: PacketVersionNumber(version)
+                })
+            );
+        }
+    }
+
+    /// Incrementing the packet sequence count shall be continuous modulo 16384.
+    ///
+    /// Requirements: 4.1.3.4.3.4
+    #[test]
+    fn packet_sequence_count_wraps() {
+        let mut count = PacketSequenceCount::new();
+        for expected in 1..=0x3fff {
+            count.increment();
+            assert_eq!(count.as_u16(), expected);
+        }
+        count.increment();
+        assert_eq!(count, PacketSequenceCount::new());
+    }
+
     /// APIDs shall be constructible from and convertible to raw integers, with values outside the
     /// 11-bit range being rejected.
+    ///
+    /// Requirements: 4.1.3.3.4.1, 4.1.3.3.4.4
     #[test]
     fn apid_conversion() {
         assert_eq!(Apid::try_from(0).unwrap().as_u16(), 0);
         assert_eq!(u16::from(Apid::try_from(0x7ff).unwrap()), 0x7ff);
         assert!(Apid::try_new(0x7ff).unwrap().is_idle());
+        assert_eq!(Apid::IDLE.as_u16(), 0b111_1111_1111);
+        assert!(!Apid::new(0x7fe).is_idle());
         assert_eq!(Apid::try_from(0x800), Err(InvalidApid { value: 0x800 }));
     }
 
     /// Packet sequence counts shall be constructible from and convertible to raw integers, with
     /// values outside the 14-bit range being rejected.
+    ///
+    /// Requirements: 4.1.3.4.3.1
     #[test]
     fn packet_sequence_count_conversion() {
         assert_eq!(PacketSequenceCount::try_from(0).unwrap().as_u16(), 0);
@@ -1413,6 +1645,8 @@ mod tests {
 
     /// The primary header shall be parseable from a partial packet, so that its fields may still
     /// be inspected even though the packet as a whole is rejected.
+    ///
+    /// Requirements: 4.1.3.2.2
     #[test]
     fn primary_header_from_partial_packet() {
         let bytes = &[
